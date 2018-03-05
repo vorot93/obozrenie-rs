@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+    <gresource prefix="/io/obozrenie/">
+        <file>game_icons/alienarena.png</file>
+        <file>game_icons/dod.png</file>
+        <file>game_icons/freeminer.svg</file>
+        <file>game_icons/hl1mp.png</file>
+        <file>game_icons/jediacademy.png</file>
+        <file>game_icons/minetest.svg</file>
+        <file>game_icons/portal2.png</file>
+        <file>game_icons/q4.png</file>
+        <file>game_icons/rtcw.png</file>
+        <file>game_icons/turtlearena.png</file>
+        <file>game_icons/warsow.png</file>
+        <file>game_icons/csgo.png</file>
+        <file>game_icons/doom3.png</file>
+        <file>game_icons/garrysmod.png</file>
+        <file>game_icons/hl2mp.png</file>
+        <file>game_icons/jedioutcast.png</file>
+        <file>game_icons/openarena.png</file>
+        <file>game_icons/q2.png</file>
+        <file>game_icons/qw.png</file>
+        <file>game_icons/stef1.png</file>
+        <file>game_icons/unvanquished.png</file>
+        <file>game_icons/wop.png</file>
+        <file>game_icons/cstrike.png</file>
+        <file>game_icons/et.png</file>
+        <file>game_icons/gesource.png</file>
+        <file>game_icons/image-missing.png</file>
+        <file>game_icons/left4dead2.png</file>
+        <file>game_icons/openttd.png</file>
+        <file>game_icons/q3a.png</file>
+        <file>game_icons/rigsofrods.png</file>
+        <file>game_icons/tf.png</file>
+        <file>game_icons/urbanterror.png</file>
+        <file>game_icons/xonotic.png</file>
+
+        <file>ui/app.ui</file>
+    </gresource>
+</gresources>

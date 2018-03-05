@@ -1,0 +1,21 @@
+[package]
+name = "obozrenie"
+version = "0.1.0"
+build = "build.rs"
+
+[dependencies]
+enum-iter = { git = "https://github.com/vorot93/enum-iter" }
+env_logger = "*"
+futures = "*"
+futures-timer = "*"
+gio = "*"
+glib = "*"
+gdk = "*"
+gdk-pixbuf = "*"
+gtk = { version = "0.4.1", features = ["v3_22"] }
+log = "*"
+rgs = { git = "https://github.com/vorot93/rgs" }
+tokio = "*"
+
+[build-dependencies]
+includedir_codegen = "*"
