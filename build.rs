@@ -1,5 +1,4 @@
 use std::env;
-use std::fs::File;
 use std::path::Path;
 use std::process::Command;
 
@@ -12,7 +11,7 @@ fn main() {
                 .join("resources.gresource")
                 .to_string_lossy()
                 .to_owned(),
-            "resources.xml"
+            "resources.xml",
         ])
         .current_dir("res")
         .status()

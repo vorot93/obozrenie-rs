@@ -1,0 +1,16 @@
+[openttd.master]
+name = "openttdm"
+
+[openttd.server]
+name = "openttds"
+
+
+[q3a.master]
+name = "q3m"
+[q3a.master.settings]
+version = 68
+
+[q3a.server]
+name = "q3s"
+[q3a.server.settings]
+version = 68

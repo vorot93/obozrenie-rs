@@ -35,6 +35,8 @@
         <file>game_icons/urbanterror.png</file>
         <file>game_icons/xonotic.png</file>
 
+        <file>settings/internal/games.toml</file>
+
         <file>ui/app.ui</file>
     </gresource>
 </gresources>

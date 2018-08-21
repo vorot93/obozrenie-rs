@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate enum_iter;
 extern crate env_logger;
+extern crate failure;
 extern crate futures;
 extern crate futures_timer;
 extern crate gdk_pixbuf;
@@ -10,15 +11,17 @@ extern crate gtk;
 extern crate librgs;
 #[macro_use]
 extern crate log;
+extern crate serde;
+extern crate serde_json;
 extern crate tokio;
 
 use env_logger::Builder as EnvLogBuilder;
-use futures::prelude::*;
+use futures::{future, prelude::*};
 use futures_timer::*;
 use gio::prelude::*;
 use gtk::prelude::*;
-use librgs::ServerEntry;
 use static_resources::Resources;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::rc::Rc;
 use std::sync::{
@@ -28,6 +31,8 @@ use std::sync::{
 
 mod static_resources;
 mod treemodel;
+
+use static_resources::*;
 
 fn build_filters(resources: &Rc<Resources>) {
     let filter_toggle = resources.ui.get_object::<gtk::ToggleButton>("filter_toggle").unwrap();
@@ -64,38 +69,24 @@ fn build_refresher(resources: &Rc<Resources>) {
             refresher.set_sensitive(false);
             server_list.clear();
 
-            let pconfig = librgs::protocols::make_default_protocols();
-
-            let (tx, rx) = channel::<ServerEntry>();
+            let (tx, rx) = channel::<(Game, librgs::Server)>();
 
             // Do the UI part of the server fetch
-            gtk::timeout_add(25, {
-                let pconfig = pconfig.clone();
-                let resources = resources.clone();
+            gtk::timeout_add(10, {
                 let refresher = refresher.clone();
                 let server_list = server_list.clone();
+                let resources = resources.clone();
+                let present_servers = Arc::new(Mutex::new(HashSet::new()));
                 move || {
                     use TryRecvError::*;
 
                     glib::Continue(match rx.try_recv() {
                         // Add and continue
-                        Ok(entry) => {
-                            treemodel::append_server(
-                                &server_list,
-                                &[
-                                    treemodel::GameEntry {
-                                        name: "q3a".into(),
-                                        p: pconfig.get("q3s").unwrap().clone(),
-                                        icon: resources.game_icons.get("q3a").unwrap().clone(),
-                                    },
-                                    treemodel::GameEntry {
-                                        name: "openttd".into(),
-                                        p: pconfig.get("openttds").unwrap().clone(),
-                                        icon: resources.game_icons.get("openttd").unwrap().clone(),
-                                    },
-                                ],
-                                entry,
-                            );
+                        Ok((game_id, srv)) => {
+                            // Prevent duplicates
+                            if present_servers.lock().unwrap().insert(srv.addr) {
+                                treemodel::append_server(&server_list, game_id, resources.game_list.0[&game_id].icon.clone(), srv);
+                            }
                             true
                         }
                         Err(e) => match e {
@@ -111,57 +102,56 @@ fn build_refresher(resources: &Rc<Resources>) {
                 }
             });
 
-            std::thread::spawn(move || {
-                let requests = vec![
-                    librgs::UserQuery {
-                        protocol: pconfig.get("openttdm".into()).unwrap().clone(),
-                        host: librgs::Host::S(
-                            librgs::StringAddr {
-                                host: "master.openttd.org".into(),
-                                port: 3978,
-                            }.into(),
-                        ),
-                    },
-                    librgs::UserQuery {
-                        protocol: pconfig.get("q3m".into()).unwrap().clone(),
-                        host: librgs::Host::S(
-                            librgs::StringAddr {
-                                host: "master3.idsoftware.com".into(),
-                                port: 27950,
-                            }.into(),
-                        ),
-                    },
-                ];
+            let task_list = resources
+                .game_list
+                .clone()
+                .0
+                .into_iter()
+                .map(|(id, e)| (id, e.query_fn))
+                .collect::<HashMap<_, _>>();
 
+            std::thread::spawn(move || {
                 let timeout = std::time::Duration::from_secs(10);
 
                 let total_queried = Arc::new(Mutex::new(0));
 
                 debug!("Starting reactor");
 
-                tokio::run(
-                    librgs::simple_udp_query(requests)
-                        .inspect({
-                            let total_queried = total_queried.clone();
-                            move |entry| {
-                                tx.send(entry.clone()).unwrap();
-                                *total_queried.lock().unwrap() += 1;
-                            }
-                        })
-                        .map_err(|e| {
-                            debug!("UdpQuery returned an error: {:?}", e);
-                            e
-                        })
-                        .timeout(timeout)
-                        .for_each(|_| Ok(()))
-                        .map(|_| ())
-                        .map_err(|_| ()),
-                );
+                tokio::run(future::ok::<(), ()>(()).and_then({
+                    let total_queried = total_queried.clone();
+                    move |_| {
+                        for (game_id, query_fn) in task_list {
+                            let tx = tx.clone();
+                            tokio::spawn(
+                                (query_fn)()
+                                    .inspect({
+                                        let total_queried = total_queried.clone();
+                                        move |srv| {
+                                            tx.send((game_id, srv.clone())).unwrap();
+                                            *total_queried.lock().unwrap() += 1;
+                                        }
+                                    })
+                                    .map_err(move |e| {
+                                        debug!("Error while querying {} returned an error: {:?}", game_id, e);
+                                        e
+                                    })
+                                    .timeout(timeout)
+                                    .for_each(|_| Ok(()))
+                                    .map(|_| ())
+                                    .map_err(|_| ()),
+                            );
+                        }
+
+                        future::ok(())
+                    }
+                }));
 
                 debug!("Queried {} servers", total_queried.lock().unwrap());
             });
         }
     });
+
+    refresher.clicked();
 }
 
 fn build_ui(app: &gtk::Application, resources: &Rc<Resources>) {
@@ -195,7 +185,6 @@ fn main() {
     application.connect_startup({
         move |app| {
             build_ui(app, &resources);
-            resources.ui.get_object::<gtk::Button>("refresh_button").unwrap().clicked();
         }
     });
     application.connect_activate(|_| {});

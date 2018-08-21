@@ -6,6 +6,7 @@ build = "build.rs"
 [dependencies]
 enum-iter = { git = "https://github.com/vorot93/enum-iter" }
 env_logger = "*"
+failure = "*"
 futures = "*"
 futures-timer = "*"
 gio = "*"
@@ -15,6 +16,8 @@ gdk-pixbuf = "*"
 gtk = { version = "0.4.1", features = ["v3_22"] }
 log = "*"
 rgs = { git = "https://github.com/vorot93/rgs" }
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
 tokio = "*"
 
 [build-dependencies]
