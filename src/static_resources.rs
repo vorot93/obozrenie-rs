@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     fmt::{self, Display, Formatter},
+    process::Command,
     rc::Rc,
     sync::Arc,
 };
@@ -16,9 +17,16 @@ use tokio::net::UdpSocket;
 
 const RES_ROOT_PATH: &str = "/io/obozrenie";
 
+#[derive(Clone, Debug)]
+pub struct LaunchData {
+    pub addr: String,
+    pub password: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct GameEntry {
     pub icon: Pixbuf,
+    pub launcher_fn: Arc<Fn(LaunchData) -> Option<Command> + Send + Sync>,
     pub query_fn: Arc<Fn() -> Box<Stream<Item = librgs::Server, Error = failure::Error> + Send + Sync> + Send + Sync>,
 }
 
@@ -33,14 +41,31 @@ pub enum Game {
 
 impl Game {
     pub fn id(&self) -> &'static str {
-        use self::Game::*;
-
         match self {
-            OpenArena => "openarena",
-            OpenTTD => "openttd",
-            QuakeIII => "q3a",
+            Game::OpenArena => "openarena",
+            Game::OpenTTD => "openttd",
+            Game::QuakeIII => "q3a",
             //    Warsow => "warsow",
             //    Xonotic => "xonotic",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "openarena" => Game::OpenArena,
+            "openttd" => Game::OpenTTD,
+            "q3a" => Game::QuakeIII,
+            _ => {
+                return None;
+            }
+        })
+    }
+
+    pub fn flatpak_id(&self) -> Option<&'static str> {
+        match self {
+            Game::OpenArena => Some("ws.openarena.OpenArena"),
+            Game::OpenTTD => Some("org.openttd.OpenTTD"),
+            _ => None,
         }
     }
 }
@@ -90,6 +115,33 @@ impl GameList {
                         id,
                         GameEntry {
                             icon: make_pixbuf_for_game(id),
+                            launcher_fn: Arc::new(move |data| {
+                                id.flatpak_id().and_then(|flatpak_id| {
+                                    let mut cmd = Command::new("flatpak");
+
+                                    cmd.arg("run");
+
+                                    cmd.arg(format!("{}/x86_64/stable", flatpak_id));
+
+                                    match id {
+                                        Game::OpenArena | Game::QuakeIII => {
+                                            cmd.arg("+connect");
+                                            cmd.arg(data.addr);
+
+                                            if let Some(password) = data.password {
+                                                cmd.arg("+password");
+                                                cmd.arg(password);
+                                            }
+                                        }
+                                        Game::OpenTTD => {
+                                            cmd.arg("-n");
+                                            cmd.arg(data.addr);
+                                        }
+                                    }
+
+                                    Some(cmd)
+                                })
+                            }),
                             query_fn: Arc::new(move || {
                                 use self::Game::*;
 
@@ -122,6 +174,7 @@ impl GameList {
                                                     }.into(),
                                                 ),
                                                 version,
+                                                ..Default::default()
                                             }.into()
                                         },
                                         vec![

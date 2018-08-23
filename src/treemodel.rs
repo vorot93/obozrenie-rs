@@ -1,10 +1,8 @@
 use static_resources::*;
 
 use gdk_pixbuf::Pixbuf;
-use gtk;
-use gtk::prelude::*;
-use librgs;
-use librgs::models::*;
+use gtk::{self, prelude::*, TreeIter};
+use librgs::{self, models::*};
 
 const QUAKE_COLOR_CODE_PATTERN: &str = "[\\^](.)";
 
@@ -17,7 +15,7 @@ pub struct GameEntry {
 
 #[derive(Clone, Copy, Debug, EnumIterator)]
 pub enum ServerStoreColumn {
-    Host,
+    Host = 0,
     NeedPass,
     PlayerCount,
     PlayerLimit,
@@ -56,4 +54,12 @@ pub fn append_server(model: &gtk::ListStore, game_id: Game, icon: Pixbuf, srv: l
             model.set_value(&iter, i as u32, &v);
         }
     }
+}
+
+pub fn get_selection_data(model: &gtk::ListStore, iter: &TreeIter) -> (Game, String, bool) {
+    let addr = model.get_value(iter, ServerStoreColumn::Host as i32).get::<String>().unwrap();
+    let game_id = Game::from_id(&model.get_value(iter, ServerStoreColumn::GameId as i32).get::<String>().unwrap()).unwrap();
+    let need_pass = model.get_value(iter, ServerStoreColumn::NeedPass as i32).get::<bool>().unwrap();
+
+    (game_id, addr, need_pass)
 }

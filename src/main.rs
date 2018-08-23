@@ -33,6 +33,7 @@ mod static_resources;
 mod treemodel;
 
 use static_resources::*;
+use treemodel::*;
 
 fn build_filters(resources: &Rc<Resources>) {
     let filter_toggle = resources.ui.get_object::<gtk::ToggleButton>("filter_toggle").unwrap();
@@ -61,6 +62,23 @@ fn build_refresher(resources: &Rc<Resources>) {
     let refresher = resources.ui.get_object::<gtk::Button>("refresh_button").unwrap();
 
     let server_list = resources.ui.get_object::<gtk::ListStore>("server-list-store").unwrap();
+
+    let server_list_view = resources.ui.get_object::<gtk::TreeView>("server_list_view").unwrap();
+
+    server_list_view.connect_row_activated({
+        let resources = resources.clone();
+        let server_list = server_list.clone();
+        let server_list_view = server_list_view.clone();
+        move |_, path, _| {
+            let (game, addr, need_pass) = get_selection_data(&server_list, &server_list.get_iter(path).unwrap());
+
+            println!("Connecting to {} server at {}", game, addr);
+
+            let launcher_fn = resources.game_list.0[&game].launcher_fn.clone();
+
+            std::thread::spawn(move || (launcher_fn)(LaunchData { addr, password: None }).map(|mut cmd| cmd.spawn()));
+        }
+    });
 
     refresher.connect_clicked({
         let refresher = refresher.clone();
