@@ -57,6 +57,12 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
     <property name="can_focus">False</property>
     <property name="icon_name">dialog-information-symbolic</property>
   </object>
+  <object class="GtkPopover" id="password_enter">
+    <property name="can_focus">False</property>
+    <child>
+      <placeholder/>
+    </child>
+  </object>
   <object class="GtkListStore" id="player-list-store">
     <columns>
       <!-- column-name name -->
@@ -148,7 +154,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-name-label</property>
+                <property name="label" translatable="yes">Name</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -174,7 +180,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-host-label</property>
+                <property name="label" translatable="yes">Host</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -189,7 +195,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-game-label</property>
+                <property name="label" translatable="yes">Game</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -226,7 +232,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-ping-label</property>
+                <property name="label" translatable="yes">Ping</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -252,7 +258,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-players-label</property>
+                <property name="label" translatable="yes">Players</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -278,7 +284,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-terrain-label</property>
+                <property name="label" translatable="yes">Map</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -289,7 +295,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
               </packing>
             </child>
             <child>
-              <object class="GtkLabel" id="serverinfo-terrain-data">
+              <object class="GtkLabel" id="serverinfo-map-data">
                 <property name="visible">True</property>
                 <property name="can_focus">False</property>
                 <property name="halign">start</property>
@@ -303,7 +309,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
               <object class="GtkLabel">
                 <property name="can_focus">False</property>
                 <property name="halign">end</property>
-                <property name="label" translatable="yes">serverinfo-gameid-label</property>
+                <property name="label" translatable="yes">Game ID</property>
                 <attributes>
                   <attribute name="weight" value="bold"/>
                 </attributes>
@@ -484,8 +490,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
             <property name="model">server-list-sort</property>
             <property name="search_column">6</property>
             <child internal-child="selection">
-              <object class="GtkTreeSelection">
-              </object>
+              <object class="GtkTreeSelection"/>
             </child>
             <child>
               <object class="GtkTreeViewColumn" id="name_column">
@@ -671,8 +676,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="model">game-list-store</property>
                 <property name="search_column">0</property>
                 <child internal-child="selection">
-                  <object class="GtkTreeSelection">
-                  </object>
+                  <object class="GtkTreeSelection"/>
                 </child>
                 <child>
                   <object class="GtkTreeViewColumn" id="game_view_column">
@@ -821,6 +825,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
               <packing>
                 <property name="left_attach">0</property>
                 <property name="top_attach">7</property>
+                <property name="width">2</property>
               </packing>
             </child>
             <child>
@@ -836,6 +841,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
               <packing>
                 <property name="left_attach">0</property>
                 <property name="top_attach">6</property>
+                <property name="width">2</property>
               </packing>
             </child>
             <child>
@@ -851,6 +857,7 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
               <packing>
                 <property name="left_attach">0</property>
                 <property name="top_attach">5</property>
+                <property name="width">2</property>
               </packing>
             </child>
             <child>
@@ -880,15 +887,6 @@ along with Obozrenie.  If not, see <http://www.gnu.org/licenses/>.
                 <property name="left_attach">1</property>
                 <property name="top_attach">4</property>
               </packing>
-            </child>
-            <child>
-              <placeholder/>
-            </child>
-            <child>
-              <placeholder/>
-            </child>
-            <child>
-              <placeholder/>
             </child>
           </object>
           <packing>

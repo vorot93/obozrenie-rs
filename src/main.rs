@@ -11,9 +11,12 @@ extern crate gtk;
 extern crate librgs;
 #[macro_use]
 extern crate log;
+extern crate regex;
 extern crate serde;
 extern crate serde_json;
 extern crate tokio;
+extern crate tokio_core;
+extern crate tokio_ping;
 
 use env_logger::Builder as EnvLogBuilder;
 use futures::{future, prelude::*};
@@ -68,13 +71,12 @@ fn build_refresher(resources: &Rc<Resources>) {
     server_list_view.connect_row_activated({
         let resources = resources.clone();
         let server_list = server_list.clone();
-        let server_list_view = server_list_view.clone();
         move |_, path, _| {
-            let (game, addr, need_pass) = get_selection_data(&server_list, &server_list.get_iter(path).unwrap());
+            let SelectionData { game_id, addr, need_pass } = SelectionData::extract(&server_list, &server_list.get_iter(path).unwrap());
 
-            println!("Connecting to {} server at {}", game, addr);
+            println!("Connecting to {} server at {}", game_id, addr);
 
-            let launcher_fn = resources.game_list.0[&game].launcher_fn.clone();
+            let launcher_fn = resources.game_list.0[&game_id].launcher_fn.clone();
 
             std::thread::spawn(move || (launcher_fn)(LaunchData { addr, password: None }).map(|mut cmd| cmd.spawn()));
         }
@@ -99,16 +101,23 @@ fn build_refresher(resources: &Rc<Resources>) {
                     use TryRecvError::*;
 
                     glib::Continue(match rx.try_recv() {
-                        // Add and continue
+                        // Insert new server entry and continue
                         Ok((game_id, srv)) => {
                             // Prevent duplicates
                             if present_servers.lock().unwrap().insert(srv.addr) {
-                                treemodel::append_server(&server_list, game_id, resources.game_list.0[&game_id].icon.clone(), srv);
+                                let game_entry = resources.game_list.0[&game_id].clone();
+                                treemodel::append_server(
+                                    &server_list,
+                                    game_id,
+                                    game_entry.icon.clone(),
+                                    game_entry.name_morpher.clone(),
+                                    srv,
+                                );
                             }
                             true
                         }
                         Err(e) => match e {
-                            // Check again later
+                            // No new entries, check again later
                             Empty => true,
                             // Reset the button and exit after fetch thread dies
                             Disconnected => {
@@ -133,7 +142,7 @@ fn build_refresher(resources: &Rc<Resources>) {
 
                 let total_queried = Arc::new(Mutex::new(0));
 
-                debug!("Starting reactor");
+                debug!("Starting query");
 
                 tokio::run(future::ok::<(), ()>(()).and_then({
                     let total_queried = total_queried.clone();
@@ -148,12 +157,10 @@ fn build_refresher(resources: &Rc<Resources>) {
                                             tx.send((game_id, srv.clone())).unwrap();
                                             *total_queried.lock().unwrap() += 1;
                                         }
-                                    })
-                                    .map_err(move |e| {
+                                    }).map_err(move |e| {
                                         debug!("Error while querying {} returned an error: {:?}", game_id, e);
                                         e
-                                    })
-                                    .timeout(timeout)
+                                    }).timeout(timeout)
                                     .for_each(|_| Ok(()))
                                     .map(|_| ())
                                     .map_err(|_| ()),

@@ -12,8 +12,7 @@ fn main() {
                 .to_string_lossy()
                 .to_owned(),
             "resources.xml",
-        ])
-        .current_dir("res")
+        ]).current_dir("res")
         .status()
         .expect("failed to generate resources");
     assert!(out.success());

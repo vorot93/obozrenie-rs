@@ -13,12 +13,12 @@ gio = "*"
 glib = "*"
 gdk = "*"
 gdk-pixbuf = "*"
-gtk = { version = "0.4.1", features = ["v3_22"] }
+gtk = { version = "*", features = ["v3_22"] }
 log = "*"
+regex = "*"
 rgs = { git = "https://github.com/vorot93/rgs" }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 tokio = "*"
-
-[build-dependencies]
-includedir_codegen = "*"
+tokio-core = "*"
+tokio-ping = { git = "https://github.com/knsd/tokio-ping" }
