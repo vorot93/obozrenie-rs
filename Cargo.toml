@@ -8,6 +8,7 @@ enum-iter = { git = "https://github.com/vorot93/enum-iter" }
 env_logger = "*"
 failure = "*"
 futures = "*"
+futures-await = "0.1"
 futures-timer = "*"
 gio = "*"
 glib = "*"
@@ -16,9 +17,11 @@ gdk-pixbuf = "*"
 gtk = { version = "*", features = ["v3_22"] }
 log = "*"
 regex = "*"
+reqwest = { git = "https://github.com/seanmonstar/reqwest" }
 rgs = { git = "https://github.com/vorot93/rgs" }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 tokio = "*"
 tokio-core = "*"
+tokio-dns-unofficial = "0.3.0"
 tokio-ping = { git = "https://github.com/knsd/tokio-ping" }

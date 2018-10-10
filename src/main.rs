@@ -1,8 +1,11 @@
+#![feature(generators)]
+
 #[macro_use]
 extern crate enum_iter;
 extern crate env_logger;
 extern crate failure;
-extern crate futures;
+#[macro_use]
+extern crate futures_await as futures;
 extern crate futures_timer;
 extern crate gdk_pixbuf;
 extern crate gio;
@@ -12,10 +15,13 @@ extern crate librgs;
 #[macro_use]
 extern crate log;
 extern crate regex;
+extern crate reqwest;
+#[macro_use]
 extern crate serde;
 extern crate serde_json;
 extern crate tokio;
 extern crate tokio_core;
+extern crate tokio_dns;
 extern crate tokio_ping;
 
 use env_logger::Builder as EnvLogBuilder;
@@ -32,6 +38,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
+mod rigsofrods;
 mod static_resources;
 mod treemodel;
 
@@ -157,10 +164,12 @@ fn build_refresher(resources: &Rc<Resources>) {
                                             tx.send((game_id, srv.clone())).unwrap();
                                             *total_queried.lock().unwrap() += 1;
                                         }
-                                    }).map_err(move |e| {
+                                    })
+                                    .map_err(move |e| {
                                         debug!("Error while querying {} returned an error: {:?}", game_id, e);
                                         e
-                                    }).timeout(timeout)
+                                    })
+                                    .timeout(timeout)
                                     .for_each(|_| Ok(()))
                                     .map(|_| ())
                                     .map_err(|_| ()),

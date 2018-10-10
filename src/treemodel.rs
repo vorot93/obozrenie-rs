@@ -1,4 +1,4 @@
-use static_resources::*;
+use crate::static_resources::*;
 
 use gdk_pixbuf::Pixbuf;
 use gtk::{self, prelude::*, TreeIter};

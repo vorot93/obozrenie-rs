@@ -4,7 +4,7 @@ use gdk_pixbuf::Pixbuf;
 use gio::{resources_register, Error, Resource};
 use glib::Bytes;
 use gtk;
-use librgs;
+use librgs::{self, dns::Resolver, ping::{DummyPinger, Pinger}};
 use regex::Regex;
 use serde_json::Value;
 use std::{
@@ -16,7 +16,10 @@ use std::{
 };
 use tokio::net::UdpSocket;
 use tokio_core::reactor::Core;
+use tokio_dns;
 use tokio_ping;
+
+use rigsofrods::*;
 
 const RES_ROOT_PATH: &str = "/io/obozrenie";
 
@@ -31,7 +34,7 @@ pub struct GameEntry {
     pub icon: Pixbuf,
     pub launcher_fn: Arc<Fn(LaunchData) -> Option<Command> + Send + Sync>,
     pub name_morpher: Arc<Fn(String) -> String + Send + Sync>,
-    pub query_fn: Arc<Fn() -> Box<Stream<Item = librgs::Server, Error = failure::Error> + Send + Sync> + Send + Sync>,
+    pub query_fn: Arc<Fn() -> Box<Stream<Item = librgs::Server, Error = failure::Error> + Send> + Send + Sync>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIterator)]
@@ -39,6 +42,7 @@ pub enum Game {
     OpenArena,
     OpenTTD,
     QuakeIII,
+    RigsOfRods,
     Xonotic,
 }
 
@@ -48,6 +52,7 @@ impl Game {
             Game::OpenArena => "openarena",
             Game::OpenTTD => "openttd",
             Game::QuakeIII => "q3a",
+            Game::RigsOfRods => "rigsofrods",
             Game::Xonotic => "xonotic",
         }
     }
@@ -57,6 +62,7 @@ impl Game {
             "openarena" => Game::OpenArena,
             "openttd" => Game::OpenTTD,
             "q3a" => Game::QuakeIII,
+            "rigsofrods" => Game::RigsOfRods,
             "xonotic" => Game::Xonotic,
             _ => {
                 return None;
@@ -85,6 +91,7 @@ impl Display for Game {
                 OpenArena => "OpenArena",
                 OpenTTD => "OpenTTD",
                 QuakeIII => "Quake III Arena",
+                RigsOfRods => "Rigs of Rods",
                 Xonotic => "Xonotic",
             }
         )
@@ -112,11 +119,14 @@ impl GameList {
         let pinger = Core::new()
             .unwrap()
             .run(tokio_ping::Pinger::new())
-            .map(|pinger| Arc::new(pinger) as Arc<librgs::ping::Pinger>)
+            .map(|pinger| Arc::new(pinger) as Arc<Pinger>)
             .map_err(|e| {
                 debug!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
                 e
-            }).ok();
+            })
+            .ok();
+
+        let resolver = Arc::new(tokio_dns::CpuPoolResolver::new(16)) as Arc<Resolver>;
 
         GameList(
             Game::enum_iter()
@@ -148,6 +158,7 @@ impl GameList {
                                             cmd.arg("-n");
                                             cmd.arg(data.addr);
                                         }
+                                        _ => unreachable!()
                                     }
 
                                     Some(cmd)
@@ -160,93 +171,114 @@ impl GameList {
                                     _ => s,
                                 }
                             }),
-                            query_fn: Arc::new({
+                            query_fn: {
+                                let resolver = resolver.clone();
                                 let pinger = pinger.clone();
-                                move || {
-                                    let protocols = librgs::protocols::make_default_protocols();
+                                match id {
+                                    Game::RigsOfRods => Arc::new(move || {
+                                        Box::new(RigsOfRodsQuery::new("http://multiplayer.rigsofrods.org/server-list", resolver.clone(), pinger.clone().unwrap_or(Arc::new(DummyPinger))))
+                                    }),
+                                    _ => Arc::new({
+                                        move || {
+                                            let protocols = librgs::protocols::make_default_protocols();
 
-                                    let (protocol, masters) = match id {
-                                        Game::OpenArena => (
-                                            {
-                                                let version = 71 as u32;
-                                                librgs::protocols::q3m::ProtocolImpl {
-                                                    q3s_protocol: Some(
-                                                        {
-                                                            let mut proto = librgs::protocols::q3s::ProtocolImpl {
-                                                                version,
-                                                                ..Default::default()
-                                                            };
-                                                            proto.rule_names.insert(librgs::protocols::q3s::Rule::Mod, "gamename".into());
-                                                            proto.server_filter =
-                                                                librgs::protocols::q3s::ServerFilter(Arc::new(|srv: librgs::Server| {
-                                                                    if let Some(ver) = srv.rules.get("version") {
-                                                                        if let Value::String(ver) = ver {
-                                                                            if ver.starts_with("ioq3+oa") {
-                                                                                return Some(srv.clone());
+                                            let (protocol, masters) = match id {
+                                                Game::OpenArena => (
+                                                    {
+                                                        let version = 71 as u32;
+                                                        librgs::protocols::q3m::ProtocolImpl {
+                                                            q3s_protocol: Some(
+                                                                {
+                                                                    let mut proto = librgs::protocols::q3s::ProtocolImpl {
+                                                                        version,
+                                                                        ..Default::default()
+                                                                    };
+                                                                    proto
+                                                                        .rule_names
+                                                                        .insert(librgs::protocols::q3s::Rule::Mod, "gamename".into());
+                                                                    proto.server_filter = librgs::protocols::q3s::ServerFilter(Arc::new(
+                                                                        |srv: librgs::Server| {
+                                                                            if let Some(ver) = srv.rules.get("version") {
+                                                                                if let Value::String(ver) = ver {
+                                                                                    if ver.starts_with("ioq3+oa") {
+                                                                                        return Some(srv.clone());
+                                                                                    }
+                                                                                }
                                                                             }
-                                                                        }
-                                                                    }
-                                                                    None
-                                                                }));
-                                                            proto
-                                                        }.into(),
-                                                    ),
-                                                    version,
-                                                    ..Default::default()
-                                                }.into()
-                                            },
-                                            vec![
-                                                ("master3.idsoftware.com", 27950),
-                                                ("master.ioquake3.org", 27950),
-                                                ("dpmaster.deathmask.net", 27950),
-                                            ],
-                                        ),
-                                        Game::OpenTTD => (protocols["openttdm"].clone(), vec![("master.openttd.org", 3978)]),
-                                        Game::QuakeIII => (protocols["q3m"].clone(), vec![("master3.idsoftware.com", 27950)]),
-                                        Game::Xonotic => (
-                                            {
-                                                let version = 3 as u32;
-                                                librgs::protocols::q3m::ProtocolImpl {
-                                                    request_tag: Some("Xonotic".to_string()),
-                                                    version,
-                                                    q3s_protocol: Some(
-                                                        {
-                                                            let mut proto = librgs::protocols::q3s::ProtocolImpl::default();
-                                                            proto
-                                                                .rule_names
-                                                                .insert(librgs::protocols::q3s::Rule::ServerName, "hostname".into());
-                                                            proto.rule_names.insert(librgs::protocols::q3s::Rule::Mod, "modname".into());
-                                                            proto
-                                                        }.into(),
-                                                    ),
-                                                }
-                                            }.into(),
-                                            vec![("dpmaster.deathmask.net", 27950)],
-                                        ),
-                                    };
+                                                                            None
+                                                                        },
+                                                                    ));
+                                                                    proto
+                                                                }
+                                                                .into(),
+                                                            ),
+                                                            version,
+                                                            ..Default::default()
+                                                        }
+                                                        .into()
+                                                    },
+                                                    vec![
+                                                        ("master3.idsoftware.com", 27950),
+                                                        ("master.ioquake3.org", 27950),
+                                                        ("dpmaster.deathmask.net", 27950),
+                                                    ],
+                                                ),
+                                                Game::OpenTTD => (protocols["openttdm"].clone(), vec![("master.openttd.org", 3978)]),
+                                                Game::QuakeIII => (protocols["q3m"].clone(), vec![("master3.idsoftware.com", 27950)]),
+                                                Game::Xonotic => (
+                                                    {
+                                                        let version = 3 as u32;
+                                                        librgs::protocols::q3m::ProtocolImpl {
+                                                            request_tag: Some("Xonotic".to_string()),
+                                                            version,
+                                                            q3s_protocol: Some(
+                                                                {
+                                                                    let mut proto = librgs::protocols::q3s::ProtocolImpl::default();
+                                                                    proto.rule_names.insert(
+                                                                        librgs::protocols::q3s::Rule::ServerName,
+                                                                        "hostname".into(),
+                                                                    );
+                                                                    proto
+                                                                        .rule_names
+                                                                        .insert(librgs::protocols::q3s::Rule::Mod, "modname".into());
+                                                                    proto
+                                                                }
+                                                                .into(),
+                                                            ),
+                                                        }
+                                                    }
+                                                    .into(),
+                                                    vec![("dpmaster.deathmask.net", 27950)],
+                                                ),
+                                                _ => unreachable!(),
+                                            };
 
-                                    let mut query_builder = librgs::UdpQueryBuilder::default();
+                                            let mut query_builder = librgs::UdpQueryBuilder::default();
 
-                                    if let Some(pinger) = pinger.clone() {
-                                        query_builder = query_builder.with_pinger(pinger.clone());
-                                    }
+                                            if let Some(pinger) = pinger.clone() {
+                                                query_builder = query_builder.with_pinger(pinger.clone());
+                                            }
 
-                                    let socket = UdpSocket::bind(&format!("[::]:{}", starting_port + i).parse().unwrap()).unwrap();
-                                    let mut q = query_builder.build(socket);
+                                            let socket = UdpSocket::bind(&format!("[::]:{}", starting_port + i).parse().unwrap()).unwrap();
+                                            let mut q = query_builder.build(socket);
 
-                                    for entry in masters {
-                                        q.start_send(librgs::UserQuery {
-                                            protocol: protocol.clone(),
-                                            host: entry.into(),
-                                        }).unwrap();
-                                    }
+                                            for entry in masters {
+                                                q.start_send(librgs::UserQuery {
+                                                    protocol: protocol.clone(),
+                                                    host: entry.into(),
+                                                })
+                                                .unwrap();
+                                            }
 
-                                    Box::new(q.map(|e| e.data))
+                                            Box::new(q.map(|e| e.data))
+                                        }
+                                    }),
                                 }
-                            }),
+                            },
                         },
                     )
-                }).collect(),
+                })
+                .collect(),
         )
     }
 }
