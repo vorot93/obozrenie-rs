@@ -39,7 +39,10 @@ fn query(addr: String, dns: Arc<Resolver>, pinger: Arc<Pinger>) -> Fallible<()> 
             host: entry.ip,
             port: entry.port
         }))) {
-            let ping = await!(pinger.ping(addr.ip())).unwrap_or(None);
+            let ping = await!(pinger.ping(addr.ip())).unwrap_or_else(|e| {
+                error!("Failed to ping {}: {}", addr, e);
+                None
+            });
 
             stream_yield!(Server {
                 ping,

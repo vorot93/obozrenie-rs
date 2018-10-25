@@ -4,7 +4,11 @@ use gdk_pixbuf::Pixbuf;
 use gio::{resources_register, Error, Resource};
 use glib::Bytes;
 use gtk;
-use librgs::{self, dns::Resolver, ping::{DummyPinger, Pinger}};
+use librgs::{
+    self,
+    dns::Resolver,
+    ping::{DummyPinger, Pinger},
+};
 use regex::Regex;
 use serde_json::Value;
 use std::{
@@ -120,11 +124,10 @@ impl GameList {
             .unwrap()
             .run(tokio_ping::Pinger::new())
             .map(|pinger| Arc::new(pinger) as Arc<Pinger>)
-            .map_err(|e| {
-                debug!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
-                e
-            })
-            .ok();
+            .unwrap_or_else(|e| {
+                error!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
+                Arc::new(DummyPinger) as Arc<Pinger>
+            });
 
         let resolver = Arc::new(tokio_dns::CpuPoolResolver::new(16)) as Arc<Resolver>;
 
@@ -158,7 +161,7 @@ impl GameList {
                                             cmd.arg("-n");
                                             cmd.arg(data.addr);
                                         }
-                                        _ => unreachable!()
+                                        _ => unreachable!(),
                                     }
 
                                     Some(cmd)
@@ -176,7 +179,11 @@ impl GameList {
                                 let pinger = pinger.clone();
                                 match id {
                                     Game::RigsOfRods => Arc::new(move || {
-                                        Box::new(RigsOfRodsQuery::new("http://multiplayer.rigsofrods.org/server-list", resolver.clone(), pinger.clone().unwrap_or(Arc::new(DummyPinger))))
+                                        Box::new(RigsOfRodsQuery::new(
+                                            "http://multiplayer.rigsofrods.org/server-list",
+                                            resolver.clone(),
+                                            pinger.clone(),
+                                        ))
                                     }),
                                     _ => Arc::new({
                                         move || {
@@ -255,9 +262,7 @@ impl GameList {
 
                                             let mut query_builder = librgs::UdpQueryBuilder::default();
 
-                                            if let Some(pinger) = pinger.clone() {
-                                                query_builder = query_builder.with_pinger(pinger.clone());
-                                            }
+                                            query_builder = query_builder.with_pinger(pinger.clone());
 
                                             let socket = UdpSocket::bind(&format!("[::]:{}", starting_port + i).parse().unwrap()).unwrap();
                                             let mut q = query_builder.build(socket);
