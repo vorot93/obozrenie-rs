@@ -2,7 +2,9 @@ use failure::{Error, Fallible};
 use futures::prelude::await;
 use futures::prelude::*;
 use librgs::{dns::Resolver, ping::Pinger, Host, Server, StringAddr};
+use log::error;
 use reqwest;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 

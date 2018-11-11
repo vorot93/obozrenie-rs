@@ -4,6 +4,7 @@ version = "0.1.0"
 build = "build.rs"
 
 [dependencies]
+derive_more = "*"
 enum-iter = { git = "https://github.com/vorot93/enum-iter" }
 env_logger = "*"
 failure = "*"

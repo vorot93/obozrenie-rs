@@ -1,3 +1,4 @@
+use enum_iter::EnumIterator;
 use failure;
 use futures::prelude::*;
 use gdk_pixbuf::Pixbuf;
@@ -9,6 +10,7 @@ use librgs::{
     dns::Resolver,
     ping::{DummyPinger, Pinger},
 };
+use log::warn;
 use regex::Regex;
 use serde_json::Value;
 use std::{
@@ -24,6 +26,7 @@ use tokio_dns;
 use tokio_ping;
 
 use rigsofrods::*;
+use widgets;
 
 const RES_ROOT_PATH: &str = "/io/obozrenie";
 
@@ -33,12 +36,54 @@ pub struct LaunchData {
     pub password: Option<String>,
 }
 
+/// Used to normalize server name.
+pub trait NameMorpher {
+    fn morph(&self, v: String) -> String;
+}
+
+#[derive(Clone, Debug)]
+pub struct EmptyMorpher;
+
+impl NameMorpher for EmptyMorpher {
+    fn morph(&self, v: String) -> String {
+        v
+    }
+}
+
+/// Scrubs color codes off the server names
+#[derive(Clone)]
+pub struct QuakeMorpher {
+    regex: Regex,
+}
+
+impl Default for QuakeMorpher {
+    fn default() -> Self {
+        Self {
+            regex: Regex::new("[\\^](.)").unwrap(),
+        }
+    }
+}
+
+impl NameMorpher for QuakeMorpher {
+    fn morph(&self, v: String) -> String {
+        self.regex.replace_all(&v, "").into_owned()
+    }
+}
+
 #[derive(Clone)]
 pub struct GameEntry {
     pub icon: Pixbuf,
     pub launcher_fn: Arc<Fn(LaunchData) -> Option<Command> + Send + Sync>,
-    pub name_morpher: Arc<Fn(String) -> String + Send + Sync>,
+    pub name_morpher: Arc<NameMorpher>,
     pub query_fn: Arc<Fn() -> Box<Stream<Item = librgs::Server, Error = failure::Error> + Send> + Send + Sync>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIterator)]
+pub enum RGSGame {
+    OpenArena,
+    OpenTTD,
+    QuakeIII,
+    Xonotic,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIterator)]
@@ -50,8 +95,19 @@ pub enum Game {
     Xonotic,
 }
 
+impl From<RGSGame> for Game {
+    fn from(v: RGSGame) -> Game {
+        match v {
+            RGSGame::OpenArena => Game::OpenArena,
+            RGSGame::OpenTTD => Game::OpenTTD,
+            RGSGame::QuakeIII => Game::QuakeIII,
+            RGSGame::Xonotic => Game::Xonotic,
+        }
+    }
+}
+
 impl Game {
-    pub fn id(&self) -> &'static str {
+    pub fn id(self) -> &'static str {
         match self {
             Game::OpenArena => "openarena",
             Game::OpenTTD => "openttd",
@@ -74,7 +130,7 @@ impl Game {
         })
     }
 
-    pub fn flatpak_id(&self) -> Option<&'static str> {
+    pub fn flatpak_id(self) -> Option<&'static str> {
         match self {
             Game::OpenArena => Some("ws.openarena.OpenArena"),
             Game::OpenTTD => Some("org.openttd.OpenTTD"),
@@ -105,27 +161,33 @@ impl Display for Game {
 #[derive(Clone)]
 pub struct GameList(pub HashMap<Game, GameEntry>);
 
-fn make_pixbuf_for_game(id: Game) -> Pixbuf {
-    for format in ["png", "svg"].into_iter() {
-        if let Ok(pixbuf) =
-            Pixbuf::new_from_resource_at_scale(&format!("{}/game_icons/{}.{}", RES_ROOT_PATH, id.id(), format), 24, 24, false)
-        {
-            return pixbuf;
-        }
-    }
+pub trait GameIconSource {
+    fn get_icon(&self, game: Game) -> Pixbuf;
+}
 
-    panic!("Failed to load icon for {}", id);
+impl GameIconSource for Resource {
+    fn get_icon(&self, game: Game) -> Pixbuf {
+        for format in ["png", "svg"].into_iter() {
+            if let Ok(pixbuf) =
+                Pixbuf::new_from_resource_at_scale(&format!("{}/game_icons/{}.{}", RES_ROOT_PATH, game.id(), format), 24, 24, false)
+            {
+                return pixbuf;
+            }
+        }
+
+        panic!("Failed to load icon for {}", game);
+    }
 }
 
 impl GameList {
-    pub fn from_resource(res: &Resource) -> GameList {
+    pub fn new(icon_source: &dyn GameIconSource) -> GameList {
         let starting_port = 5600;
         let pinger = Core::new()
             .unwrap()
             .run(tokio_ping::Pinger::new())
             .map(|pinger| Arc::new(pinger) as Arc<Pinger>)
             .unwrap_or_else(|e| {
-                error!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
+                warn!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
                 Arc::new(DummyPinger) as Arc<Pinger>
             });
 
@@ -138,7 +200,7 @@ impl GameList {
                     (
                         id,
                         GameEntry {
-                            icon: make_pixbuf_for_game(id),
+                            icon: icon_source.get_icon(id),
                             launcher_fn: Arc::new(move |data| {
                                 id.flatpak_id().and_then(|flatpak_id| {
                                     let mut cmd = Command::new("flatpak");
@@ -167,13 +229,10 @@ impl GameList {
                                     Some(cmd)
                                 })
                             }),
-                            name_morpher: Arc::new({
-                                let q3_scrubber = Regex::new("[\\^](.)").unwrap();
-                                move |s| match id {
-                                    Game::OpenArena | Game::QuakeIII => q3_scrubber.replace_all(&s, "").into_owned(),
-                                    _ => s,
-                                }
-                            }),
+                            name_morpher: match id {
+                                Game::QuakeIII | Game::OpenArena => Arc::new(QuakeMorpher::default()),
+                                _ => Arc::new(EmptyMorpher),
+                            },
                             query_fn: {
                                 let resolver = resolver.clone();
                                 let pinger = pinger.clone();
@@ -290,7 +349,7 @@ impl GameList {
 
 pub struct Resources {
     pub game_list: GameList,
-    pub ui: gtk::Builder,
+    pub ui: widgets::UIBuilder,
 }
 
 pub(crate) fn init() -> Result<Rc<Resources>, Error> {
@@ -305,8 +364,10 @@ pub(crate) fn init() -> Result<Rc<Resources>, Error> {
     resources_register(&resource);
 
     let out = Rc::new(Resources {
-        game_list: GameList::from_resource(&resource),
-        ui: gtk::Builder::new_from_resource(&format!("{}/ui/app.ui", RES_ROOT_PATH)),
+        game_list: GameList::new(&resource),
+        ui: widgets::UIBuilder {
+            inner: gtk::Builder::new_from_resource(&format!("{}/ui/app.ui", RES_ROOT_PATH)),
+        },
     });
 
     Ok(out)
