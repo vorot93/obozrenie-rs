@@ -36,15 +36,82 @@ pub struct LaunchData {
     pub password: Option<String>,
 }
 
+pub trait Launcher: Send + Sync {
+    fn launch_cmd(&self, _data: &LaunchData) -> Option<Command> {
+        None
+    }
+}
+
+#[derive(Clone)]
+pub struct FlatpakLauncher {
+    pub id_source: Arc<FlatpakIdentifiable>,
+}
+
+impl Launcher for FlatpakLauncher {
+    fn launch_cmd(&self, _data: &LaunchData) -> Option<Command> {
+        self.id_source.id().map(|flatpak_id| {
+            let mut cmd = Command::new("flatpak");
+
+            cmd.arg("run");
+
+            cmd.arg(format!("{}/x86_64/stable", flatpak_id));
+
+            cmd
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct QuakeLauncher {
+    pub flatpak_launcher: FlatpakLauncher,
+}
+
+impl Launcher for QuakeLauncher {
+    fn launch_cmd(&self, data: &LaunchData) -> Option<Command> {
+        self.flatpak_launcher.launch_cmd(data).map(|mut cmd| {
+            cmd.arg("+connect");
+            cmd.arg(&data.addr);
+
+            if let Some(password) = data.password.as_ref() {
+                cmd.arg("+password");
+                cmd.arg(password);
+            }
+
+            cmd
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct OpenTTDLauncher {
+    pub flatpak_launcher: FlatpakLauncher,
+}
+
+impl Launcher for OpenTTDLauncher {
+    fn launch_cmd(&self, data: &LaunchData) -> Option<Command> {
+        self.flatpak_launcher.launch_cmd(data).map(|mut cmd| {
+            cmd.arg("-n");
+            cmd.arg(&data.addr);
+
+            cmd
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct DummyLauncher;
+
+impl Launcher for DummyLauncher {}
+
 /// Used to normalize server name.
 pub trait NameMorpher {
     fn morph(&self, v: String) -> String;
 }
 
 #[derive(Clone, Debug)]
-pub struct EmptyMorpher;
+pub struct DummyMorpher;
 
-impl NameMorpher for EmptyMorpher {
+impl NameMorpher for DummyMorpher {
     fn morph(&self, v: String) -> String {
         v
     }
@@ -72,10 +139,14 @@ impl NameMorpher for QuakeMorpher {
 
 #[derive(Clone)]
 pub struct GameEntry {
+    /// Game's icon
     pub icon: Pixbuf,
-    pub launcher_fn: Arc<Fn(LaunchData) -> Option<Command> + Send + Sync>,
+    /// Fetches server list for this game
+    pub querier: Arc<Fn() -> Box<Stream<Item = librgs::Server, Error = failure::Error> + Send> + Send + Sync>,
+    /// Adapts server name for the server list
     pub name_morpher: Arc<NameMorpher>,
-    pub query_fn: Arc<Fn() -> Box<Stream<Item = librgs::Server, Error = failure::Error> + Send> + Send + Sync>,
+    /// Launch command builder
+    pub launcher: Arc<Launcher>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIterator)]
@@ -129,8 +200,14 @@ impl Game {
             }
         })
     }
+}
 
-    pub fn flatpak_id(self) -> Option<&'static str> {
+pub trait FlatpakIdentifiable: Send + Sync {
+    fn id(&self) -> Option<&'static str>;
+}
+
+impl FlatpakIdentifiable for Game {
+    fn id(&self) -> Option<&'static str> {
         match self {
             Game::OpenArena => Some("ws.openarena.OpenArena"),
             Game::OpenTTD => Some("org.openttd.OpenTTD"),
@@ -201,39 +278,19 @@ impl GameList {
                         id,
                         GameEntry {
                             icon: icon_source.get_icon(id),
-                            launcher_fn: Arc::new(move |data| {
-                                id.flatpak_id().and_then(|flatpak_id| {
-                                    let mut cmd = Command::new("flatpak");
-
-                                    cmd.arg("run");
-
-                                    cmd.arg(format!("{}/x86_64/stable", flatpak_id));
-
-                                    match id {
-                                        Game::OpenArena | Game::QuakeIII | Game::Xonotic => {
-                                            cmd.arg("+connect");
-                                            cmd.arg(data.addr);
-
-                                            if let Some(password) = data.password {
-                                                cmd.arg("+password");
-                                                cmd.arg(password);
-                                            }
-                                        }
-                                        Game::OpenTTD => {
-                                            cmd.arg("-n");
-                                            cmd.arg(data.addr);
-                                        }
-                                        _ => unreachable!(),
-                                    }
-
-                                    Some(cmd)
-                                })
-                            }),
+                            launcher: {
+                                let flatpak_launcher = FlatpakLauncher { id_source: Arc::new(id) };
+                                match id {
+                                    Game::QuakeIII | Game::Xonotic | Game::OpenArena => Arc::new(QuakeLauncher { flatpak_launcher }),
+                                    Game::OpenTTD => Arc::new(OpenTTDLauncher { flatpak_launcher }),
+                                    _ => Arc::new(DummyLauncher),
+                                }
+                            },
                             name_morpher: match id {
                                 Game::QuakeIII | Game::OpenArena => Arc::new(QuakeMorpher::default()),
-                                _ => Arc::new(EmptyMorpher),
+                                _ => Arc::new(DummyMorpher),
                             },
-                            query_fn: {
+                            querier: {
                                 let resolver = resolver.clone();
                                 let pinger = pinger.clone();
                                 match id {

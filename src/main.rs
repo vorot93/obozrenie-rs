@@ -110,7 +110,7 @@ fn build_refresher(resources: &Rc<Resources>) {
 
             let f = Rc::new({
                 let addr = addr.clone();
-                let game_launcher = resources.game_list.0[&game_id].launcher_fn.clone();
+                let game_launcher = resources.game_list.0[&game_id].launcher.clone();
 
                 move |password: Option<String>| {
                     let addr = addr.clone();
@@ -120,7 +120,7 @@ fn build_refresher(resources: &Rc<Resources>) {
 
                     std::thread::spawn({
                         move || {
-                            (game_launcher)(LaunchData { addr, password }).map(|mut cmd| cmd.spawn());
+                            game_launcher.launch_cmd(&LaunchData { addr, password }).map(|mut cmd| cmd.spawn());
                         }
                     });
                 }
@@ -196,7 +196,7 @@ fn build_refresher(resources: &Rc<Resources>) {
                 .clone()
                 .0
                 .into_iter()
-                .map(|(id, e)| (id, e.query_fn))
+                .map(|(id, e)| (id, e.querier))
                 .collect::<HashMap<_, _>>();
 
             std::thread::spawn(move || {
