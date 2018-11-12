@@ -209,10 +209,11 @@ fn build_refresher(resources: &Rc<Resources>) {
                 tokio::run(future::ok::<(), ()>(()).and_then({
                     let total_queried = total_queried.clone();
                     move |_| {
-                        for (game_id, query_fn) in task_list {
+                        for (game_id, querier) in task_list {
                             let tx = sink.clone();
                             tokio::spawn(
-                                (query_fn)()
+                                querier
+                                    .query()
                                     .inspect({
                                         let total_queried = total_queried.clone();
                                         move |srv| {
