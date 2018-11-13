@@ -13,6 +13,11 @@ impl super::Launcher for Launcher {
             cmd.arg("-n");
             cmd.arg(&data.addr);
 
+            if let Some(pass) = data.password.as_ref() {
+                cmd.arg("-p");
+                cmd.arg(pass);
+            }
+
             cmd
         })
     }
