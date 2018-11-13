@@ -37,11 +37,10 @@ use std::sync::{
     Arc, Mutex,
 };
 
-mod rigsofrods;
+mod games;
 mod static_resources;
 mod widgets;
 
-use static_resources::*;
 use widgets::*;
 
 fn build_filters(resources: &Rc<Resources>) {
@@ -120,7 +119,9 @@ fn build_refresher(resources: &Rc<Resources>) {
 
                     std::thread::spawn({
                         move || {
-                            game_launcher.launch_cmd(&LaunchData { addr, password }).map(|mut cmd| cmd.spawn());
+                            game_launcher
+                                .launch_cmd(&games::LaunchData { addr, password })
+                                .map(|mut cmd| cmd.spawn());
                         }
                     });
                 }
@@ -157,7 +158,7 @@ fn build_refresher(resources: &Rc<Resources>) {
             refresher.set_sensitive(false);
             server_list.0.clear();
 
-            let (sink, fountain) = channel::<(Game, librgs::Server)>();
+            let (sink, fountain) = channel::<(games::Game, librgs::Server)>();
 
             // Do the UI part of the server fetch
             gtk::timeout_add(10, {

@@ -1,7 +1,8 @@
+use super::*;
+
 use failure::{Error, Fallible};
 use futures::prelude::await;
-use futures::prelude::*;
-use librgs::{dns::Resolver, ping::Pinger, Host, Server, StringAddr};
+use librgs::{dns::Resolver, ping::Pinger, Host, StringAddr};
 use log::error;
 use reqwest;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 #[derive(Serialize, Deserialize)]
-struct RigsOfRodsServer {
+struct Server {
     #[serde(rename = "has-password")]
     pub has_password: u8,
     #[serde(rename = "current-users")]
@@ -26,15 +27,15 @@ struct RigsOfRodsServer {
     pub name: String,
 }
 
-pub struct RigsOfRodsQuery {
-    inner: Box<Stream<Item = Server, Error = Error> + Send>,
+struct Query {
+    inner: Box<dyn Stream<Item = librgs::Server, Error = Error> + Send>,
 }
 
-#[async_stream(item = Server)]
-fn query(addr: String, dns: Arc<Resolver>, pinger: Arc<Pinger>) -> Fallible<()> {
+#[async_stream(item = librgs::Server)]
+fn query(addr: String, dns: Arc<dyn Resolver>, pinger: Arc<dyn Pinger>) -> Fallible<()> {
     let mut rsp = await!(reqwest::async::Client::new().get(&format!("{}?json=true", addr)).send())?;
 
-    let data = await!(rsp.json::<Vec<RigsOfRodsServer>>())?;
+    let data = await!(rsp.json::<Vec<Server>>())?;
 
     for entry in data {
         if let Ok(addr) = await!(dns.resolve(Host::S(StringAddr {
@@ -46,7 +47,7 @@ fn query(addr: String, dns: Arc<Resolver>, pinger: Arc<Pinger>) -> Fallible<()> 
                 None
             });
 
-            stream_yield!(Server {
+            stream_yield!(librgs::Server {
                 ping,
                 name: Some(entry.name),
                 map: Some(entry.terrain_name),
@@ -59,7 +60,7 @@ fn query(addr: String, dns: Arc<Resolver>, pinger: Arc<Pinger>) -> Fallible<()> 
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect(),
-                ..Server::new(addr)
+                ..librgs::Server::new(addr)
             });
         }
     }
@@ -67,8 +68,8 @@ fn query(addr: String, dns: Arc<Resolver>, pinger: Arc<Pinger>) -> Fallible<()> 
     Ok(())
 }
 
-impl RigsOfRodsQuery {
-    pub fn new<S>(master_addr: S, dns: Arc<Resolver>, pinger: Arc<Pinger>) -> Self
+impl Query {
+    pub fn new<S>(master_addr: S, dns: Arc<dyn Resolver>, pinger: Arc<dyn Pinger>) -> Self
     where
         S: ToString,
     {
@@ -78,11 +79,24 @@ impl RigsOfRodsQuery {
     }
 }
 
-impl Stream for RigsOfRodsQuery {
-    type Item = Server;
+impl Stream for Query {
+    type Item = librgs::Server;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.inner.poll()
+    }
+}
+
+#[derive(Clone)]
+pub struct Querier {
+    pub master_addr: String,
+    pub resolver: Arc<dyn Resolver>,
+    pub pinger: Arc<dyn Pinger>,
+}
+
+impl super::Querier for Querier {
+    fn query(&self) -> Box<dyn Stream<Item = librgs::Server, Error = failure::Error> + Send> {
+        Box::new(Query::new(&self.master_addr, self.resolver.clone(), self.pinger.clone()))
     }
 }

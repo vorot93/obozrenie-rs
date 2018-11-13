@@ -1,4 +1,4 @@
-use crate::static_resources::*;
+use crate::games::*;
 
 use derive_more::From;
 use enum_iter::EnumIterator;
