@@ -37,6 +37,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
+mod filters;
 mod games;
 mod static_resources;
 mod widgets;
@@ -50,16 +51,169 @@ fn build_filters(resources: &Rc<Resources>) {
     let filters = resources.ui.get_object::<FiltersPopover, _>().0;
 
     // Fill list of games in filter menu
-    let game_list = resources.ui.get_object::<GameListStore, _>().0;
+    let game_list = resources.ui.get_object::<GameListStore, _>();
 
     for (id, entry) in resources.game_list.0.iter() {
-        append_game(&game_list, *id, entry.icon.clone());
+        game_list.append_game(*id, entry.icon.clone());
     }
+
+    let filter_data = Arc::new(Mutex::new(filters::Filters::default()));
 
     // Refilter on changes
     resources.ui.get_object::<GameListView, _>().0.get_selection().connect_changed({
+        let filter_data = filter_data.clone();
         let filter_model = filter_model.clone();
-        move |_| {
+        let game_list = game_list.clone();
+        move |s| {
+            {
+                let value = {
+                    let (selection, model) = s.get_selected_rows();
+
+                    selection
+                        .into_iter()
+                        .map(|path| {
+                            let iter = model.get_iter(&path).unwrap();
+
+                            game_list.get_game(&iter).0
+                        })
+                        .collect::<HashSet<_>>()
+                };
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).games;
+
+                *v = value;
+            }
+
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<ModFilter, _>().0.connect_changed({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = w.get_text().unwrap_or_else(String::new);
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).game_mod;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<GameTypeFilter, _>().0.connect_changed({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = w.get_text().unwrap_or_else(String::new);
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).game_type;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<MapFilter, _>().0.connect_changed({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = w.get_text().unwrap_or_else(String::new);
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).map;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<PingFilter, _>().0.connect_value_changed({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = std::time::Duration::from_millis(w.get_value_as_int() as u64);
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).max_ping;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<AntiCheatFilter, _>().0.connect_changed({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = match w.get_active_text().unwrap().as_str() {
+                    "Enabled" => Some(true),
+                    "Disabled" => Some(false),
+                    "Ignore" => None,
+                    other => unreachable!(format!("Invalid variant: {}", other)),
+                };
+
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).anticheat;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<NotFullFilter, _>().0.connect_toggled({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = w.get_active();
+
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).not_full;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<NotEmptyFilter, _>().0.connect_toggled({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = w.get_active();
+
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).not_empty;
+
+                *v = value;
+            }
+            filter_model.refilter();
+        }
+    });
+    resources.ui.get_object::<NoPasswordFilter, _>().0.connect_toggled({
+        let filter_data = filter_data.clone();
+        let filter_model = filter_model.clone();
+        move |w| {
+            {
+                let value = w.get_active();
+
+                let mut f = filter_data.lock().unwrap();
+
+                let v = &mut (*f).no_password;
+
+                *v = value;
+            }
             filter_model.refilter();
         }
     });
@@ -83,13 +237,15 @@ fn build_filters(resources: &Rc<Resources>) {
     });
 
     filter_model.set_visible_func({
+        let filter_data = filter_data.clone();
         move |model, iter| {
             let list_store = model.clone().downcast::<gtk::ListStore>().unwrap();
-            if list_store.get_iter_first().is_some() {
-                let selection_data = ServerStore(list_store).get_server(iter.into());
-                debug!("Refiltering... {:?}", selection_data);
-            }
-            true
+
+            let (game, server) = ServerStore(list_store).get_server(iter.into());
+
+            debug!("Refiltering... {:?}", server);
+
+            filter_data.lock().unwrap().matches(game, &server)
         }
     });
 }
@@ -105,7 +261,7 @@ fn build_refresher(resources: &Rc<Resources>) {
         let resources = resources.clone();
         let server_list = server_list.clone();
         move |_, path, _| {
-            let SelectionData { game_id, addr, need_pass } = server_list.get_server(&server_list.0.get_iter(path).unwrap()).unwrap();
+            let (game_id, librgs::Server { addr, need_pass, .. }) = server_list.get_server(&server_list.0.get_iter(path).unwrap());
 
             let f = Rc::new({
                 let addr = addr.clone();
@@ -120,14 +276,17 @@ fn build_refresher(resources: &Rc<Resources>) {
                     std::thread::spawn({
                         move || {
                             game_launcher
-                                .launch_cmd(&games::LaunchData { addr, password })
+                                .launch_cmd(&games::LaunchData {
+                                    addr: addr.to_string(),
+                                    password,
+                                })
                                 .map(|mut cmd| cmd.spawn());
                         }
                     });
                 }
             }) as Rc<Fn(Option<String>)>;
 
-            if need_pass {
+            if let Some(true) = need_pass {
                 let password_request = resources.ui.get_object::<PasswordRequest, _>().0;
                 let password_entry = resources.ui.get_object::<PasswordEntry, _>().0;
                 let connect_button = resources.ui.get_object::<ConnectWithPassword, _>().0;
@@ -144,6 +303,7 @@ fn build_refresher(resources: &Rc<Resources>) {
                     let f = f.clone();
                     move |_| (f)(password_entry.get_text())
                 });
+
                 password_request.popup();
             } else {
                 (f)(None)

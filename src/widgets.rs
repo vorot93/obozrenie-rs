@@ -2,7 +2,6 @@ use crate::games::*;
 
 use derive_more::From;
 use enum_iter::EnumIterator;
-use failure::{format_err, Fallible};
 use gdk_pixbuf::Pixbuf;
 use gtk::{self, prelude::*, TreeIter};
 use librgs;
@@ -35,10 +34,18 @@ widget!(ServerListView, gtk::TreeView, "ServerListView");
 
 widget!(FilterToggle, gtk::ToggleButton, "FilterToggle");
 widget!(FiltersPopover, gtk::Popover, "FiltersPopover");
-widget!(GameListStore, gtk::ListStore, "GameListStore");
 widget!(GameListView, gtk::TreeView, "GameListView");
 widget!(MainWindow, gtk::ApplicationWindow, "MainWindow");
 widget!(RefreshButton, gtk::Button, "RefreshButton");
+
+widget!(ModFilter, gtk::Entry, "ModFilter");
+widget!(GameTypeFilter, gtk::Entry, "GameTypeFilter");
+widget!(MapFilter, gtk::Entry, "MapFilter");
+widget!(PingFilter, gtk::SpinButton, "PingFilter");
+widget!(AntiCheatFilter, gtk::ComboBoxText, "AntiCheatFilter");
+widget!(NotFullFilter, gtk::CheckButton, "NotFullFilter");
+widget!(NotEmptyFilter, gtk::CheckButton, "NotEmptyFilter");
+widget!(NoPasswordFilter, gtk::CheckButton, "NoPasswordFilter");
 
 widget!(PasswordRequest, gtk::Popover, "PasswordRequest");
 widget!(PasswordEntry, gtk::Entry, "PasswordEntry");
@@ -66,19 +73,50 @@ pub enum GameStoreColumn {
     StatusIcon,
 }
 
-pub fn append_game(model: &gtk::ListStore, game_id: Game, icon: Pixbuf) {
-    let iter = model.insert_with_values(None, &[], &[]);
-    for (i, col) in GameStoreColumn::enum_iter().enumerate() {
-        let insertable: Option<gtk::Value> = match col {
-            GameStoreColumn::Id => Some(From::from(game_id.id().clone())),
-            GameStoreColumn::Name => Some(From::from(&game_id.to_string())),
-            GameStoreColumn::Icon => Some(From::from(&icon.clone())),
-            _ => None,
-        };
+#[derive(Clone, Debug, From)]
+pub struct GameListStore(pub gtk::ListStore);
 
-        if let Some(v) = insertable {
-            model.set_value(&iter, i as u32, &v);
+impl Widget<gtk::ListStore> for GameListStore {
+    fn id() -> &'static str {
+        "GameListStore"
+    }
+
+    fn inner(self) -> gtk::ListStore {
+        self.0
+    }
+}
+
+impl GameListStore {
+    pub fn append_game(&self, game_id: Game, icon: Pixbuf) -> TreeIter {
+        let mut columns = Vec::<u32>::new();
+        let mut values = Vec::<Box<ToValue>>::new();
+        for (i, col) in GameStoreColumn::enum_iter().enumerate() {
+            let insertable: Option<gtk::Value> = match col {
+                GameStoreColumn::Id => Some(From::from(game_id.id().clone())),
+                GameStoreColumn::Name => Some(From::from(&game_id.to_string())),
+                GameStoreColumn::Icon => Some(From::from(&icon.clone())),
+                _ => None,
+            };
+
+            if let Some(v) = insertable {
+                columns.push(i as u32);
+                values.push(Box::new(v));
+            }
         }
+
+        self.0
+            .insert_with_values(None, &columns, &values.iter().map(|v| &**v).collect::<Vec<&dyn ToValue>>())
+    }
+
+    pub fn get_game(&self, iter: &TreeIter) -> (Game, Pixbuf) {
+        (
+            Game::from_id(&self.0.get_value(iter, GameStoreColumn::Id as i32).get::<String>().unwrap()).unwrap(),
+            self.0
+                .get_value(iter, GameStoreColumn::Icon as i32)
+                .get::<Pixbuf>()
+                .unwrap()
+                .clone(),
+        )
     }
 }
 
@@ -100,6 +138,8 @@ pub enum ServerStoreColumn {
     LockIcon,
     SecureIcon,
     CountryIcon,
+    /// Ugly hack to retain original data
+    JSON,
 }
 
 #[derive(Clone, Debug, From)]
@@ -129,8 +169,9 @@ pub struct SelectionData {
 }
 
 impl ServerStore {
-    pub fn append_server(&self, game_id: Game, icon: Pixbuf, name_morpher: Arc<NameMorpher>, srv: librgs::Server) {
-        let iter = self.0.insert_with_values(None, &[], &[]);
+    pub fn append_server(&self, game_id: Game, icon: Pixbuf, name_morpher: Arc<NameMorpher>, srv: librgs::Server) -> TreeIter {
+        let mut columns = Vec::<u32>::new();
+        let mut values = Vec::<Box<ToValue>>::new();
         for (i, col) in ServerStoreColumn::enum_iter().enumerate() {
             let insertable: Option<gtk::Value> = match col {
                 ServerStoreColumn::Host => Some(From::from(&srv.addr.to_string())),
@@ -160,36 +201,26 @@ impl ServerStore {
                 ServerStoreColumn::Country => Some(From::from(&format!("{:?}", srv.country.clone()))),
                 ServerStoreColumn::Name => Some(From::from(&name_morpher.morph(srv.name.clone().unwrap_or_else(Default::default)))),
                 ServerStoreColumn::GameId => Some(From::from(&game_id.id().clone())),
+                ServerStoreColumn::GameMod => srv.mod_name.as_ref().map(|v| From::from(v)),
                 ServerStoreColumn::GameIcon => Some(From::from(&icon.clone())),
+                ServerStoreColumn::JSON => Some(From::from(&serde_json::to_string(&srv).unwrap())),
                 _ => None,
             };
 
             if let Some(v) = insertable {
-                self.0.set_value(&iter, i as u32, &v);
+                columns.push(i as u32);
+                values.push(Box::new(v));
             }
         }
+
+        self.0
+            .insert_with_values(None, &columns, &values.iter().map(|v| &**v).collect::<Vec<&dyn ToValue>>())
     }
 
-    pub fn get_server(&self, iter: &TreeIter) -> Fallible<SelectionData> {
-        let addr = self
-            .0
-            .get_value(iter, ServerStoreColumn::Host as i32)
-            .get::<String>()
-            .ok_or(format_err!("Failed to extract address"))?;
-        let game_id = Game::from_id(
-            &self
-                .0
-                .get_value(iter, ServerStoreColumn::GameId as i32)
-                .get::<String>()
-                .ok_or(format_err!("Failed to extract game ID"))?,
+    pub fn get_server(&self, iter: &TreeIter) -> (Game, librgs::Server) {
+        (
+            Game::from_id(&self.0.get_value(iter, ServerStoreColumn::GameId as i32).get::<String>().unwrap()).unwrap(),
+            serde_json::from_str(&self.0.get_value(iter, ServerStoreColumn::JSON as i32).get::<String>().unwrap()).unwrap(),
         )
-        .unwrap();
-        let need_pass = self
-            .0
-            .get_value(iter, ServerStoreColumn::NeedPass as i32)
-            .get::<bool>()
-            .ok_or(format_err!("Failed to extract need_pass"))?;
-
-        Ok(SelectionData { game_id, addr, need_pass })
     }
 }
