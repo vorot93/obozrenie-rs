@@ -156,17 +156,11 @@ impl Widget<gtk::ListStore> for ServerStore {
 }
 
 #[derive(Clone, Debug, From)]
-pub enum ServerEntryPath {
+pub enum ServerListIter {
     Iter(gtk::TreeIter),
     Path(gtk::TreePath),
 }
 
-#[derive(Clone, Debug)]
-pub struct SelectionData {
-    pub game_id: Game,
-    pub addr: String,
-    pub need_pass: bool,
-}
 
 impl ServerStore {
     pub fn append_server(&self, game_id: Game, icon: Pixbuf, name_morpher: Arc<NameMorpher>, srv: librgs::Server) -> TreeIter {
