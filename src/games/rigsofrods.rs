@@ -33,7 +33,9 @@ struct Query {
 
 #[async_stream(item = librgs::Server)]
 fn query(addr: String, dns: Arc<dyn Resolver>, pinger: Arc<dyn Pinger>) -> Fallible<()> {
-    let mut rsp = await!(reqwest::async::Client::new().get(&format!("{}?json=true", addr)).send())?;
+    let mut rsp = await!(reqwest::async::Client::new()
+        .get(&format!("{}?json=true", addr))
+        .send())?;
 
     let data = await!(rsp.json::<Vec<Server>>())?;
 
@@ -97,6 +99,10 @@ pub struct Querier {
 
 impl super::Querier for Querier {
     fn query(&self) -> Box<dyn Stream<Item = librgs::Server, Error = failure::Error> + Send> {
-        Box::new(Query::new(&self.master_addr, self.resolver.clone(), self.pinger.clone()))
+        Box::new(Query::new(
+            &self.master_addr,
+            self.resolver.clone(),
+            self.pinger.clone(),
+        ))
     }
 }

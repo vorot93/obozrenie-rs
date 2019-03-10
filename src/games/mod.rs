@@ -129,7 +129,10 @@ impl GameList {
             .run(tokio_ping::Pinger::new())
             .map(|pinger| Arc::new(pinger) as Arc<dyn Pinger>)
             .unwrap_or_else(|e| {
-                warn!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
+                warn!(
+                    "Failed to spawn pinger: {}. Using manual latency measurement.",
+                    e
+                );
                 Arc::new(DummyPinger) as Arc<dyn Pinger>
             });
 

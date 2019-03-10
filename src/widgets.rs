@@ -104,13 +104,23 @@ impl GameListStore {
             }
         }
 
-        self.0
-            .insert_with_values(None, &columns, &values.iter().map(|v| &**v).collect::<Vec<&dyn ToValue>>())
+        self.0.insert_with_values(
+            None,
+            &columns,
+            &values.iter().map(|v| &**v).collect::<Vec<&dyn ToValue>>(),
+        )
     }
 
     pub fn get_game(&self, iter: &TreeIter) -> (Game, Pixbuf) {
         (
-            Game::from_id(&self.0.get_value(iter, GameStoreColumn::Id as i32).get::<String>().unwrap()).unwrap(),
+            Game::from_id(
+                &self
+                    .0
+                    .get_value(iter, GameStoreColumn::Id as i32)
+                    .get::<String>()
+                    .unwrap(),
+            )
+            .unwrap(),
             self.0
                 .get_value(iter, GameStoreColumn::Icon as i32)
                 .get::<Pixbuf>()
@@ -161,9 +171,14 @@ pub enum ServerListIter {
     Path(gtk::TreePath),
 }
 
-
 impl ServerStore {
-    pub fn append_server(&self, game_id: Game, icon: Pixbuf, name_morpher: Arc<NameMorpher>, srv: librgs::Server) -> TreeIter {
+    pub fn append_server(
+        &self,
+        game_id: Game,
+        icon: Pixbuf,
+        name_morpher: Arc<NameMorpher>,
+        srv: librgs::Server,
+    ) -> TreeIter {
         let mut columns = Vec::<u32>::new();
         let mut values = Vec::<Box<ToValue>>::new();
         for (i, col) in ServerStoreColumn::enum_iter().enumerate() {
@@ -192,8 +207,12 @@ impl ServerStore {
                         None
                     }
                 }
-                ServerStoreColumn::Country => Some(From::from(&format!("{:?}", srv.country.clone()))),
-                ServerStoreColumn::Name => Some(From::from(&name_morpher.morph(srv.name.clone().unwrap_or_else(Default::default)))),
+                ServerStoreColumn::Country => {
+                    Some(From::from(&format!("{:?}", srv.country.clone())))
+                }
+                ServerStoreColumn::Name => Some(From::from(
+                    &name_morpher.morph(srv.name.clone().unwrap_or_else(Default::default)),
+                )),
                 ServerStoreColumn::GameId => Some(From::from(&game_id.id().clone())),
                 ServerStoreColumn::GameMod => srv.mod_name.as_ref().map(|v| From::from(v)),
                 ServerStoreColumn::GameIcon => Some(From::from(&icon.clone())),
@@ -207,14 +226,31 @@ impl ServerStore {
             }
         }
 
-        self.0
-            .insert_with_values(None, &columns, &values.iter().map(|v| &**v).collect::<Vec<&dyn ToValue>>())
+        self.0.insert_with_values(
+            None,
+            &columns,
+            &values.iter().map(|v| &**v).collect::<Vec<&dyn ToValue>>(),
+        )
     }
 
     pub fn get_server(&self, iter: &TreeIter) -> (Game, librgs::Server) {
         (
-            Game::from_id(&self.0.get_value(iter, ServerStoreColumn::GameId as i32).get::<String>().unwrap()).unwrap(),
-            serde_json::from_str(&self.0.get_value(iter, ServerStoreColumn::JSON as i32).get::<String>().unwrap()).unwrap(),
+            Game::from_id(
+                &self
+                    .0
+                    .get_value(iter, ServerStoreColumn::GameId as i32)
+                    .get::<String>()
+                    .unwrap(),
+            )
+            .unwrap(),
+            serde_json::from_str(
+                &self
+                    .0
+                    .get_value(iter, ServerStoreColumn::JSON as i32)
+                    .get::<String>()
+                    .unwrap(),
+            )
+            .unwrap(),
         )
     }
 }

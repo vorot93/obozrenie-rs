@@ -12,9 +12,12 @@ const RES_ROOT_PATH: &str = "/io/obozrenie";
 impl games::GameIconSource for Resource {
     fn get_icon(&self, game: games::Game) -> Pixbuf {
         for format in ["png", "svg"].into_iter() {
-            if let Ok(pixbuf) =
-                Pixbuf::new_from_resource_at_scale(&format!("{}/game_icons/{}.{}", RES_ROOT_PATH, game.id(), format), 24, 24, false)
-            {
+            if let Ok(pixbuf) = Pixbuf::new_from_resource_at_scale(
+                &format!("{}/game_icons/{}.{}", RES_ROOT_PATH, game.id(), format),
+                24,
+                24,
+                false,
+            ) {
                 return pixbuf;
             }
         }
