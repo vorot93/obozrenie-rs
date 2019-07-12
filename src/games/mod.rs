@@ -1,11 +1,11 @@
 use enum_iter::EnumIterator;
-use futures::prelude::*;
+use futures01::prelude::*;
 use gdk_pixbuf::Pixbuf;
-use librgs::{
+use log::warn;
+use rgs::{
     dns::Resolver,
     ping::{DummyPinger, Pinger},
 };
-use log::warn;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
@@ -16,7 +16,7 @@ use tokio_core::reactor::Core;
 mod flatpak;
 mod openttd;
 mod quake;
-mod rgs;
+mod rgs_support;
 mod rigsofrods;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIterator)]
@@ -72,7 +72,7 @@ impl Display for Game {
 }
 
 pub trait Querier: Send + Sync {
-    fn query(&self) -> Box<dyn Stream<Item = librgs::Server, Error = failure::Error> + Send>;
+    fn query(&self) -> Box<dyn Stream<Item = rgs::models::Server, Error = failure::Error> + Send>;
 }
 
 /// Used to normalize server name.
@@ -129,7 +129,10 @@ impl GameList {
             .run(tokio_ping::Pinger::new())
             .map(|pinger| Arc::new(pinger) as Arc<dyn Pinger>)
             .unwrap_or_else(|e| {
-                warn!("Failed to spawn pinger: {}. Using manual latency measurement.", e);
+                warn!(
+                    "Failed to spawn pinger: {}. Using manual latency measurement.",
+                    e
+                );
                 Arc::new(DummyPinger) as Arc<dyn Pinger>
             });
 
@@ -165,24 +168,22 @@ impl GameList {
                                         pinger,
                                     }),
                                     _ => Arc::new({
-                                        let protocols = librgs::protocols::make_default_protocols();
+                                        let protocols = rgs::protocols::make_default_protocols();
 
-                                        let (protocol, mut master_servers) = match id {
+                                        let (protocol, master_servers) = match id {
                                             Game::OpenArena => (
                                                 {
                                                     let version = 71 as u32;
-                                                    librgs::protocols::q3m::ProtocolImpl {
+                                                    rgs::protocols::q3m::ProtocolImpl {
                                                         q3s_protocol: Some(
                                                             {
-                                                                let mut proto = librgs::protocols::q3s::ProtocolImpl {
+                                                                let mut proto = rgs::protocols::q3s::ProtocolImpl {
                                                                     version,
                                                                     ..Default::default()
                                                                 };
-                                                                proto
-                                                                    .rule_names
-                                                                    .insert(librgs::protocols::q3s::Rule::Mod, "gamename".into());
-                                                                proto.server_filter = librgs::protocols::q3s::ServerFilter(Arc::new(
-                                                                    |srv: librgs::Server| {
+                                                                proto.rule_names.insert(rgs::protocols::q3s::Rule::Mod, "gamename".into());
+                                                                proto.server_filter = rgs::protocols::q3s::ServerFilter(Arc::new(
+                                                                    |srv: rgs::models::Server| {
                                                                         if let Some(ver) = srv.rules.get("version") {
                                                                             if let Value::String(ver) = ver {
                                                                                 if ver.starts_with("ioq3+oa") {
@@ -213,18 +214,16 @@ impl GameList {
                                             Game::Xonotic => (
                                                 {
                                                     let version = 3 as u32;
-                                                    librgs::protocols::q3m::ProtocolImpl {
+                                                    rgs::protocols::q3m::ProtocolImpl {
                                                         request_tag: Some("Xonotic".to_string()),
                                                         version,
                                                         q3s_protocol: Some(
                                                             {
-                                                                let mut proto = librgs::protocols::q3s::ProtocolImpl::default();
+                                                                let mut proto = rgs::protocols::q3s::ProtocolImpl::default();
                                                                 proto
                                                                     .rule_names
-                                                                    .insert(librgs::protocols::q3s::Rule::ServerName, "hostname".into());
-                                                                proto
-                                                                    .rule_names
-                                                                    .insert(librgs::protocols::q3s::Rule::Mod, "modname".into());
+                                                                    .insert(rgs::protocols::q3s::Rule::ServerName, "hostname".into());
+                                                                proto.rule_names.insert(rgs::protocols::q3s::Rule::Mod, "modname".into());
                                                                 proto
                                                             }
                                                             .into(),
@@ -240,7 +239,7 @@ impl GameList {
                                         let master_servers =
                                             master_servers.into_iter().map(|(addr, port)| (addr.to_string(), port)).collect();
 
-                                        rgs::Querier {
+                                        rgs_support::Querier {
                                             protocol,
                                             master_servers,
                                             port: starting_port + i as u16,

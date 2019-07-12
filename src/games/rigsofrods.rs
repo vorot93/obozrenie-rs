@@ -1,16 +1,21 @@
-use super::*;
 
-use failure::{Error, Fallible};
-use futures::prelude::await;
-use librgs::{dns::Resolver, ping::Pinger, Host, StringAddr};
+use failure::Error;
+use futures::{compat::*, prelude::*};
+use futures01::{Poll, Stream};
+use gen_stream::*;
 use log::error;
-use reqwest;
+use reqwest::r#async::Client as HttpClient;
+use rgs::{
+    dns::Resolver,
+    models::{Host, Server, StringAddr},
+    ping::Pinger,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
-struct Server {
+struct ServerEntry {
     #[serde(rename = "has-password")]
     pub has_password: u8,
     #[serde(rename = "current-users")]
@@ -28,59 +33,68 @@ struct Server {
 }
 
 struct Query {
-    inner: Box<dyn Stream<Item = librgs::Server, Error = Error> + Send>,
-}
-
-#[async_stream(item = librgs::Server)]
-fn query(addr: String, dns: Arc<dyn Resolver>, pinger: Arc<dyn Pinger>) -> Fallible<()> {
-    let mut rsp = await!(reqwest::async::Client::new().get(&format!("{}?json=true", addr)).send())?;
-
-    let data = await!(rsp.json::<Vec<Server>>())?;
-
-    for entry in data {
-        if let Ok(addr) = await!(dns.resolve(Host::S(StringAddr {
-            host: entry.ip,
-            port: entry.port
-        }))) {
-            let ping = await!(pinger.ping(addr.ip())).unwrap_or_else(|e| {
-                error!("Failed to ping {}: {}", addr, e);
-                None
-            });
-
-            stream_yield!(librgs::Server {
-                ping,
-                name: Some(entry.name),
-                map: Some(entry.terrain_name),
-                num_clients: Some(u64::from(entry.current_users)),
-                max_clients: Some(u64::from(entry.max_clients)),
-                rules: vec![
-                    ("is_official", Value::from(entry.is_official == 1)),
-                    ("verified", Value::from(entry.verified == 1))
-                ]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
-                ..librgs::Server::new(addr)
-            });
-        }
-    }
-
-    Ok(())
+    inner: Box<dyn Stream<Item = Server, Error = Error> + Send>,
 }
 
 impl Query {
     pub fn new<S>(master_addr: S, dns: Arc<dyn Resolver>, pinger: Arc<dyn Pinger>) -> Self
     where
-        S: ToString,
+        S: Display + Send + 'static,
     {
+        use std::task::Poll;
+
         Self {
-            inner: Box::new(query(master_addr.to_string(), dns, pinger)),
+            inner: Box::new(
+                Box::pin(GenTryStream::from(static move || {
+                    let mut rsp = gen_await!(HttpClient::new()
+                        .get(&format!("{}?json=true", master_addr))
+                        .send()
+                        .compat())?;
+
+                    let data = gen_await!(rsp.json::<Vec<ServerEntry>>().compat())?;
+
+                    for entry in data {
+                        if let Ok(addr) = gen_await!(dns
+                            .resolve(Host::S(StringAddr {
+                                host: entry.ip,
+                                port: entry.port
+                            }))
+                            .compat())
+                        {
+                            let ping =
+                                gen_await!(pinger.ping(addr.ip()).compat()).unwrap_or_else(|e| {
+                                    error!("Failed to ping {}: {}", addr, e);
+                                    None
+                                });
+
+                            yield Poll::Ready(Server {
+                                ping,
+                                name: Some(entry.name),
+                                map: Some(entry.terrain_name),
+                                num_clients: Some(u64::from(entry.current_users)),
+                                max_clients: Some(u64::from(entry.max_clients)),
+                                rules: vec![
+                                    ("is_official", Value::from(entry.is_official == 1)),
+                                    ("verified", Value::from(entry.verified == 1)),
+                                ]
+                                .into_iter()
+                                .map(|(k, v)| (k.to_string(), v))
+                                .collect(),
+                                ..Server::new(addr)
+                            });
+                        }
+                    }
+
+                    Ok(())
+                }))
+                .compat(),
+            ),
         }
     }
 }
 
 impl Stream for Query {
-    type Item = librgs::Server;
+    type Item = rgs::models::Server;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -96,7 +110,11 @@ pub struct Querier {
 }
 
 impl super::Querier for Querier {
-    fn query(&self) -> Box<dyn Stream<Item = librgs::Server, Error = failure::Error> + Send> {
-        Box::new(Query::new(&self.master_addr, self.resolver.clone(), self.pinger.clone()))
+    fn query(&self) -> Box<dyn Stream<Item = rgs::models::Server, Error = failure::Error> + Send> {
+        Box::new(Query::new(
+            self.master_addr.clone(),
+            self.resolver.clone(),
+            self.pinger.clone(),
+        ))
     }
 }

@@ -17,7 +17,7 @@ pub struct Filters {
 }
 
 impl Filters {
-    pub fn matches(&self, game: Game, srv: &librgs::Server) -> bool {
+    pub fn matches(&self, game: Game, srv: &rgs::models::Server) -> bool {
         if !self.games.is_empty() {
             if !self.games.contains(&game) {
                 return false;

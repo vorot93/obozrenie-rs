@@ -1,5 +1,5 @@
-use futures::prelude::*;
-use librgs::{dns::Resolver, ping::Pinger, TProtocol};
+use futures01::prelude::*;
+use rgs::{dns::Resolver, models::TProtocol, ping::Pinger};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
@@ -13,8 +13,8 @@ pub struct Querier {
 }
 
 impl super::Querier for Querier {
-    fn query(&self) -> Box<dyn Stream<Item = librgs::Server, Error = failure::Error> + Send> {
-        let mut query_builder = librgs::UdpQueryBuilder::default();
+    fn query(&self) -> Box<dyn Stream<Item = rgs::models::Server, Error = failure::Error> + Send> {
+        let mut query_builder = rgs::UdpQueryBuilder::default();
 
         query_builder = query_builder.with_pinger(self.pinger.clone());
 
@@ -22,7 +22,7 @@ impl super::Querier for Querier {
         let mut q = query_builder.build(socket);
 
         for entry in &self.master_servers {
-            q.start_send(librgs::UserQuery {
+            q.start_send(rgs::models::UserQuery {
                 protocol: self.protocol.clone(),
                 host: entry.clone().into(),
             })
