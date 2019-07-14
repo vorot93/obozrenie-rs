@@ -16,7 +16,6 @@
 
 #![feature(async_await, generators, gen_future)]
 
-use futures01::{future, prelude::*};
 use gio::prelude::*;
 use gtk::prelude::*;
 use log::debug;
@@ -289,7 +288,7 @@ fn build_filters(resources: &Rc<Resources>) {
     });
 }
 
-fn build_refresher(resources: &Rc<Resources>) {
+fn build_refresher(resources: &Rc<Resources>, executor: tokio::runtime::TaskExecutor) {
     let refresher = resources.ui.get_object::<RefreshButton, _>().0;
 
     let server_list = resources.ui.get_object::<ServerStore, _>();
@@ -359,13 +358,18 @@ fn build_refresher(resources: &Rc<Resources>) {
         let refresher = refresher.clone();
         let resources = resources.clone();
         move |_| {
+            let executor = executor.clone();
+
             refresher.set_sensitive(false);
             server_list.0.clear();
 
             let (sink, fountain) = channel::<(games::Game, rgs::models::Server)>();
 
+            let total_queried = Arc::new(AtomicUsize::new(0));
+
             // Do the UI part of the server fetch
             gtk::timeout_add(10, {
+                let total_queried = total_queried.clone();
                 let refresher = refresher.clone();
                 let server_list = server_list.clone();
                 let resources = resources.clone();
@@ -393,6 +397,8 @@ fn build_refresher(resources: &Rc<Resources>) {
                             Empty => true,
                             // Reset the button and exit after fetch thread dies
                             Disconnected => {
+                                debug!("Queried {} servers", total_queried.load(Ordering::Relaxed));
+
                                 refresher.set_sensitive(true);
                                 false
                             }
@@ -409,56 +415,52 @@ fn build_refresher(resources: &Rc<Resources>) {
                 .map(|(id, e)| (id, e.querier))
                 .collect::<HashMap<_, _>>();
 
-            std::thread::spawn(move || {
-                let timeout = std::time::Duration::from_secs(10);
+            let timeout = std::time::Duration::from_secs(10);
 
-                let total_queried = Arc::new(AtomicUsize::new(0));
+            debug!("Starting query");
 
-                debug!("Starting query");
+            {
+                let s = sink;
+                for (game_id, querier) in task_list {
+                    let tx = s.clone();
+                    executor.spawn({
+                        use futures01::prelude::*;
 
-                tokio::run(future::ok::<(), ()>(()).and_then({
-                    let total_queried = total_queried.clone();
-                    move |_| {
-                        for (game_id, querier) in task_list {
-                            let tx = sink.clone();
-                            tokio::spawn(
-                                querier
-                                    .query()
-                                    .inspect({
-                                        let total_queried = total_queried.clone();
-                                        move |srv| {
-                                            tx.send((game_id, srv.clone())).unwrap();
-                                            total_queried.fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    })
-                                    .map_err(move |e| {
-                                        debug!(
-                                            "Error while querying {} returned an error: {:?}",
-                                            game_id, e
-                                        );
-                                        e
-                                    })
-                                    .timeout(timeout)
-                                    .for_each(|_| Ok(()))
-                                    .map(|_| ())
-                                    .map_err(|_| ()),
-                            );
-                        }
-
-                        future::ok(())
-                    }
-                }));
-
-                debug!("Queried {} servers", total_queried.load(Ordering::Relaxed));
-            });
+                        querier
+                            .query()
+                            .inspect({
+                                let total_queried = total_queried.clone();
+                                move |srv| {
+                                    tx.send((game_id, srv.clone())).unwrap();
+                                    total_queried.fetch_add(1, Ordering::Relaxed);
+                                }
+                            })
+                            .map_err(move |e| {
+                                debug!(
+                                    "Error while querying {} returned an error: {:?}",
+                                    game_id, e
+                                );
+                                e
+                            })
+                            .timeout(timeout)
+                            .for_each(|_| Ok(()))
+                            .map(|_| ())
+                            .map_err(|_| ())
+                    });
+                }
+            }
         }
     });
 
     refresher.clicked();
 }
 
-fn build_ui(app: &gtk::Application, resources: &Rc<Resources>) {
-    build_refresher(resources);
+fn build_ui(
+    app: &gtk::Application,
+    executor: tokio::runtime::TaskExecutor,
+    resources: &Rc<Resources>,
+) {
+    build_refresher(resources, executor);
     build_filters(resources);
 
     let window = resources.ui.get_object::<MainWindow, _>().0;
@@ -472,12 +474,15 @@ fn build_ui(app: &gtk::Application, resources: &Rc<Resources>) {
 fn main() {
     env_logger::init();
 
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
     let application =
         gtk::Application::new(Some("io.obozrenie"), gio::ApplicationFlags::empty()).unwrap();
     let resources = static_resources::init().expect("GResource initialization failed.");
     application.connect_startup({
+        let executor = rt.executor();
         move |app| {
-            build_ui(app, &resources);
+            build_ui(app, executor.clone(), &resources);
         }
     });
     application.connect_activate(|_| {});
