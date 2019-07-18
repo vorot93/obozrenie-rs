@@ -32,7 +32,7 @@ use std::{fmt::Display, sync::Arc};
 #[derive(Serialize, Deserialize)]
 struct ServerEntry {
     #[serde(rename = "has-password")]
-    pub has_password: u8,
+    pub has_password: bool,
     #[serde(rename = "current-users")]
     pub current_users: u8,
     #[serde(rename = "max-clients")]
@@ -89,8 +89,8 @@ impl Query {
                                 num_clients: Some(u64::from(entry.current_users)),
                                 max_clients: Some(u64::from(entry.max_clients)),
                                 rules: vec![
-                                    ("is_official", Value::from(entry.is_official == 1)),
-                                    ("verified", Value::from(entry.verified == 1)),
+                                    ("is_official", Value::from(entry.is_official)),
+                                    ("verified", Value::from(entry.verified)),
                                 ]
                                 .into_iter()
                                 .map(|(k, v)| (k.to_string(), v))

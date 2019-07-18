@@ -16,9 +16,10 @@
 
 #![feature(async_await, generators, gen_future)]
 
+use futures::{compat::*, prelude::*};
 use gio::prelude::*;
 use gtk::prelude::*;
-use log::debug;
+use log::*;
 use static_resources::Resources;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -27,6 +28,7 @@ use std::sync::{
     mpsc::{channel, TryRecvError},
     Arc, Mutex,
 };
+use std::time::{Duration, Instant};
 use tokio::prelude::StreamExt;
 
 mod filters;
@@ -35,6 +37,17 @@ mod static_resources;
 mod widgets;
 
 use crate::widgets::*;
+
+#[derive(Clone, Debug)]
+enum AppEvent {
+    AddServer((games::Game, rgs::models::Server)),
+    RefreshComplete,
+}
+
+#[derive(Clone)]
+enum AppCommand {
+    StartRefresh(HashMap<games::Game, Arc<dyn games::Querier>>),
+}
 
 fn build_filters(resources: &Rc<Resources>) {
     let filter_model = resources.ui.get_object::<ServerListFilter, _>().0;
@@ -281,14 +294,21 @@ fn build_filters(resources: &Rc<Resources>) {
 
             let (game, server) = ServerStore(list_store).get_server(iter.into());
 
-            debug!("Refiltering... {:?}", server);
+            trace!("Refiltering... {:?}", server);
 
             filter_data.lock().unwrap().matches(game, &server)
         }
     });
 }
 
-fn build_refresher(resources: &Rc<Resources>, executor: tokio::runtime::TaskExecutor) {
+fn build_ui(
+    app: &gtk::Application,
+    executor: tokio::runtime::TaskExecutor,
+    resources: &Rc<Resources>,
+) {
+    let (cmd_sink, cmd_faucet) = channel::<AppCommand>();
+    let (event_sink, event_faucet) = channel::<AppEvent>();
+
     let refresher = resources.ui.get_object::<RefreshButton, _>().0;
 
     let server_list = resources.ui.get_object::<ServerStore, _>();
@@ -354,114 +374,169 @@ fn build_refresher(resources: &Rc<Resources>, executor: tokio::runtime::TaskExec
         }
     });
 
+    let present_servers = Arc::new(Mutex::new(HashSet::new()));
+
     refresher.connect_clicked({
+        let cmd_sink = cmd_sink.clone();
         let refresher = refresher.clone();
         let resources = resources.clone();
+        let server_list = server_list.clone();
+        let present_servers = present_servers.clone();
         move |_| {
-            let executor = executor.clone();
-
             refresher.set_sensitive(false);
             server_list.0.clear();
+            present_servers.lock().unwrap().clear();
 
-            let (sink, fountain) = channel::<(games::Game, rgs::models::Server)>();
+            cmd_sink
+                .send(AppCommand::StartRefresh(
+                    resources
+                        .game_list
+                        .clone()
+                        .0
+                        .into_iter()
+                        .map(|(id, e)| (id, e.querier))
+                        .collect(),
+                ))
+                .unwrap();
+        }
+    });
 
-            let total_queried = Arc::new(AtomicUsize::new(0));
+    build_filters(resources);
 
-            // Do the UI part of the server fetch
-            gtk::timeout_add(10, {
-                let total_queried = total_queried.clone();
-                let refresher = refresher.clone();
-                let server_list = server_list.clone();
-                let resources = resources.clone();
-                let present_servers = Arc::new(Mutex::new(HashSet::new()));
-                move || {
-                    use TryRecvError::*;
+    executor.spawn({
+        let cmd_sink = cmd_sink.clone();
+        let event_sink = event_sink.clone();
 
-                    glib::Continue(match fountain.try_recv() {
-                        // Insert new server entry and continue
-                        Ok((game_id, srv)) => {
-                            // Prevent duplicates
-                            if present_servers.lock().unwrap().insert(srv.addr) {
-                                let game_entry = resources.game_list.0[&game_id].clone();
-                                server_list.append_server(
-                                    game_id,
-                                    game_entry.icon.clone(),
-                                    game_entry.name_morpher.clone(),
-                                    srv,
-                                );
-                            }
-                            true
+        async move {
+            use TryRecvError::*;
+
+            let _ = cmd_sink.clone();
+
+            loop {
+                match cmd_faucet.try_recv() {
+                    Ok(cmd) => match cmd {
+                        AppCommand::StartRefresh(task_list) => {
+                            let total_queried = Arc::new(AtomicUsize::new(0));
+
+                            let timeout = std::time::Duration::from_secs(10);
+
+                            debug!("Starting query");
+
+                            tokio::spawn({
+                                use futures01::{future as future01, prelude::*};
+
+                                future01::join_all(task_list.into_iter().map({
+                                    let event_sink = event_sink.clone();
+                                    let total_queried = total_queried.clone();
+
+                                    move |(game_id, querier)| {
+                                        querier
+                                            .query()
+                                            .inspect({
+                                                let event_sink = event_sink.clone();
+                                                let total_queried = total_queried.clone();
+                                                move |srv| {
+                                                    event_sink
+                                                        .send(AppEvent::AddServer((
+                                                            game_id,
+                                                            srv.clone(),
+                                                        )))
+                                                        .unwrap();
+                                                    total_queried.fetch_add(1, Ordering::Relaxed);
+                                                }
+                                            })
+                                            .map_err(move |e| {
+                                                debug!(
+                                                    "Error while querying {} returned an error: {:?}",
+                                                    game_id, e
+                                                );
+                                                e
+                                            })
+                                            .timeout(timeout)
+                                            .for_each(|_| Ok(()))
+                                            .inspect(move |_| debug!("{} query complete", game_id))
+                                    }
+                                }))
+                                    .then({
+                                        let event_sink = event_sink.clone();
+                                        move |_| {
+                                            debug!(
+                                                "Queried {} servers",
+                                                total_queried.load(Ordering::Relaxed)
+                                            );
+
+                                            event_sink.send(AppEvent::RefreshComplete).unwrap();
+
+                                            Ok(())
+                                        }
+                                    })
+                            });
                         }
-                        Err(e) => match e {
-                            // No new entries, check again later
-                            Empty => true,
-                            // Reset the button and exit after fetch thread dies
-                            Disconnected => {
-                                debug!("Queried {} servers", total_queried.load(Ordering::Relaxed));
-
-                                refresher.set_sensitive(true);
-                                false
-                            }
-                        },
-                    })
+                    },
+                    Err(e) => match e {
+                        Empty => {}
+                        Disconnected => {
+                            return;
+                        }
+                    },
                 }
-            });
 
-            let task_list = resources
-                .game_list
-                .clone()
-                .0
-                .into_iter()
-                .map(|(id, e)| (id, e.querier))
-                .collect::<HashMap<_, _>>();
-
-            let timeout = std::time::Duration::from_secs(10);
-
-            debug!("Starting query");
-
-            {
-                let s = sink;
-                for (game_id, querier) in task_list {
-                    let tx = s.clone();
-                    executor.spawn({
-                        use futures01::prelude::*;
-
-                        querier
-                            .query()
-                            .inspect({
-                                let total_queried = total_queried.clone();
-                                move |srv| {
-                                    tx.send((game_id, srv.clone())).unwrap();
-                                    total_queried.fetch_add(1, Ordering::Relaxed);
-                                }
-                            })
-                            .map_err(move |e| {
-                                debug!(
-                                    "Error while querying {} returned an error: {:?}",
-                                    game_id, e
-                                );
-                                e
-                            })
-                            .timeout(timeout)
-                            .for_each(|_| Ok(()))
-                            .map(|_| ())
-                            .map_err(|_| ())
-                    });
-                }
+                tokio::timer::Delay::new(Instant::now() + Duration::from_millis(100))
+                    .compat()
+                    .await
+                    .unwrap()
             }
+        }
+            .map(|_| Ok(()))
+            .boxed()
+            .compat()
+    });
+
+    gtk::timeout_add(10, {
+        let event_sink = event_sink.clone();
+        let refresher = refresher.clone();
+        let server_list = server_list.clone();
+        let resources = resources.clone();
+        let present_servers = present_servers.clone();
+        move || {
+            use TryRecvError::*;
+
+            let _ = event_sink.clone();
+
+            glib::Continue({
+                match event_faucet.try_recv() {
+                    // Insert new server entry and continue
+                    Ok(ev) => {
+                        match ev {
+                            AppEvent::AddServer((game_id, srv)) => {
+                                // Prevent duplicates
+                                if present_servers.lock().unwrap().insert(srv.addr) {
+                                    let game_entry = resources.game_list.0[&game_id].clone();
+                                    server_list.append_server(
+                                        game_id,
+                                        game_entry.icon.clone(),
+                                        game_entry.name_morpher.clone(),
+                                        srv,
+                                    );
+                                }
+                            }
+                            AppEvent::RefreshComplete => {
+                                refresher.set_sensitive(true);
+                            }
+                        };
+
+                        true
+                    }
+                    Err(e) => match e {
+                        Empty => true,
+                        Disconnected => false,
+                    },
+                }
+            })
         }
     });
 
     refresher.clicked();
-}
-
-fn build_ui(
-    app: &gtk::Application,
-    executor: tokio::runtime::TaskExecutor,
-    resources: &Rc<Resources>,
-) {
-    build_refresher(resources, executor);
-    build_filters(resources);
 
     let window = resources.ui.get_object::<MainWindow, _>().0;
     window.connect_delete_event(|_, _| Inhibit(false));

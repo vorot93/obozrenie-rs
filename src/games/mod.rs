@@ -92,7 +92,7 @@ pub trait Querier: Send + Sync {
 }
 
 /// Used to normalize server name.
-pub trait NameMorpher {
+pub trait NameMorpher: Send + Sync {
     fn morph(&self, v: String) -> String {
         v
     }
